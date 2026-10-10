@@ -1,0 +1,10 @@
+{
+  "name": "awanapps-kit",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kit pendaftaran aplikasi ke katalog Awan Apps (apps.awandigitals.com). Menandai folder .awanapps sebagai ESM agar `node .awanapps/validate.js` tetap jalan di project apa pun (termasuk project non-Node seperti Flutter/Android).",
+  "scripts": {
+    "validate": "node validate.js"
+  }
+}
