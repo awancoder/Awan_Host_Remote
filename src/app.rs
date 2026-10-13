@@ -291,7 +291,7 @@ impl AwanApp {
         let t = i18n::strings(lang);
 
         Self {
-            page: Page::Summary, lang, hosts: Vec::new(), active: None, notice: None,
+            page: Page::Hosts, lang, hosts: Vec::new(), active: None, notice: None,
             sessions: std::collections::HashMap::new(), empty_session: Session::default(),
             host_store, host_store_message: None, sidebar_expanded: std::collections::HashSet::new(), live_auto_refresh: false,
             connecting_focus: None,
@@ -522,9 +522,6 @@ impl AwanApp {
             host_store::Event::Listed(Ok((hosts, skipped))) => {
                 for host in hosts {
                     if !self.hosts.iter().any(|existing| existing.address == host.address) { self.hosts.push(host); }
-                }
-                if !self.hosts.is_empty() && self.active.is_none() && self.page == Page::Summary {
-                    self.page = Page::Hosts;
                 }
                 if skipped > 0 { self.host_store_message = Some(i18n::profiles_skipped(self.lang, skipped)); }
             }
