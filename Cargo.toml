@@ -28,6 +28,27 @@ russh = { version = "=0.64.1", default-features = false, features = ["ring", "rs
 tokio = { version = "1.48", features = ["rt", "net", "time", "sync", "macros"] }
 zeroize = "1.8"
 
+# Saved SSH logins on Linux go to the desktop keyring (GNOME Keyring / KWallet)
+# over the freedesktop Secret Service D-Bus API. The async-io runtime keeps
+# zbus off Tokio, so its blocking calls are safe inside the SSH session runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4.0", features = ["rt-async-io-crypto-rust"] }
+
+[package.metadata.deb]
+name = "awan-host-remote"
+maintainer = "Awan <awan@awandigitals.com>"
+copyright = "Awan Digitals"
+extended-description = "Native Rust desktop app to connect to and manage Linux servers over SSH."
+section = "net"
+priority = "optional"
+depends = "$auto, libvulkan1, libxkbcommon-x11-0, libwayland-client0, libfontconfig1"
+recommends = "gnome-keyring | kwalletmanager, mesa-vulkan-drivers"
+assets = [
+    ["target/release/awan-host-remote", "usr/bin/", "755"],
+    ["packaging/linux/awan-host-remote.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/pixmaps/awan-host-remote.png", "644"],
+]
+
 [profile.release]
 opt-level = 2
 lto = "thin"

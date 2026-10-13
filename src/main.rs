@@ -44,6 +44,9 @@ fn main() {
                     gpui_kit::size(gpui_kit::px(1280.0), gpui_kit::px(820.0)),
                     cx,
                 )),
+                // Wayland app_id / X11 WM_CLASS; must match StartupWMClass in
+                // packaging/linux/awan-host-remote.desktop for the dock icon.
+                app_id: Some("awan-host-remote".into()),
                 ..Default::default()
             };
             gpui_kit::open_window(window_options, cx, |window, cx| {

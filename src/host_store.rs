@@ -1,5 +1,6 @@
-//! Windows Credential Manager stores both profile metadata and its login secret.
-//! No plaintext credentials, extra runtime, or dependencies are required.
+//! Saved SSH profiles and their login secret live in the OS credential store:
+//! Windows Credential Manager or, on Linux, the Secret Service keyring.
+//! No plaintext credentials or extra runtime are required.
 use anyhow::{Context, Result, bail};
 use zeroize::Zeroizing;
 use crate::model::{Host, HostForm};
@@ -22,10 +23,10 @@ pub struct Login {
 
 #[cfg(windows)]
 const PREFIX: &str = "AwanHostRemote/ssh/v1/";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const MAX_BLOB: usize = 2560;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn encode(host: &Host, key_path: &str, secret: &str) -> Result<Zeroizing<Vec<u8>>> {
     let mut bytes = Zeroizing::new(b"AHSSH01\n".to_vec());
     let port = host.port.to_string();
@@ -35,11 +36,11 @@ fn encode(host: &Host, key_path: &str, secret: &str) -> Result<Zeroizing<Vec<u8>
         bytes.extend_from_slice(&(field.len() as u32).to_le_bytes());
         bytes.extend_from_slice(field.as_bytes());
     }
-    if bytes.len() > MAX_BLOB { bail!("Profil dan login melebihi batas Credential Manager (2.560 byte). SSH tetap dapat dipakai tanpa menyimpan login."); }
+    if bytes.len() > MAX_BLOB { bail!("Profil dan login melebihi batas penyimpanan kredensial (2.560 byte). SSH tetap dapat dipakai tanpa menyimpan login."); }
     Ok(bytes)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn decode(bytes: &[u8]) -> Result<Login> {
     if bytes.len() > MAX_BLOB || !bytes.starts_with(b"AHSSH01\n") { bail!("Format profil tersimpan tidak dikenal."); }
     let mut offset = 8;
@@ -182,13 +183,94 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod platform {
+    //! freedesktop Secret Service (GNOME Keyring / KWallet). One item per
+    //! normalized address, found by attributes; the item secret holds the same
+    //! encoded profile + login blob as on Windows. No plaintext fallback: if no
+    //! keyring is running, saving fails and manual login still works.
+    use super::*;
+    use std::collections::HashMap;
+    use secret_service::{EncryptionType, blocking::{Item, SecretService}};
+
+    const APP: &str = "awan-host-remote";
+    const KIND: &str = "ssh-v1";
+
+    fn connect<'a>() -> Result<SecretService<'a>> {
+        SecretService::connect(EncryptionType::Dh)
+            .context("Keyring desktop (Secret Service: GNOME Keyring/KWallet) tidak tersedia; gunakan login manual")
+    }
+    fn search<'a>(service: &'a SecretService, address: Option<&str>) -> Result<Vec<Item<'a>>> {
+        let key = address.map(address_key);
+        let mut query = HashMap::from([("application", APP), ("kind", KIND)]);
+        if let Some(key) = key.as_deref() { query.insert("address", key); }
+        let found = service.search_items(query).context("Daftar SSH tersimpan tidak dapat dibaca dari keyring")?;
+        for item in &found.locked {
+            item.unlock().context("Keyring terkunci; buka kunci keyring untuk memakai login tersimpan")?;
+        }
+        Ok(found.unlocked.into_iter().chain(found.locked).collect())
+    }
+    fn read_item(item: &Item) -> Result<Login> {
+        let secret = Zeroizing::new(item.get_secret().context("Login tersimpan tidak dapat dibaca; gunakan login manual")?);
+        let login = decode(&secret)?;
+        let attributes = item.get_attributes().context("Atribut keyring tidak dapat dibaca")?;
+        if attributes.get("address").map(String::as_str) != Some(address_key(&login.host.address).as_str()) {
+            bail!("IP profil tidak cocok dengan atribut keyring.");
+        }
+        Ok(login)
+    }
+
+    pub fn save(host: &Host, key_path: &str, secret: &str) -> Result<()> {
+        let bytes = encode(host, key_path, secret)?;
+        let service = connect()?;
+        let collection = service.get_default_collection().context("Login berhasil, tetapi keyring default tidak tersedia")?;
+        if collection.is_locked().context("Status keyring tidak dapat dibaca")? {
+            collection.unlock().context("Login berhasil, tetapi keyring terkunci sehingga profil tidak disimpan")?;
+        }
+        let key = address_key(&host.address);
+        let attributes = HashMap::from([("application", APP), ("kind", KIND), ("address", key.as_str())]);
+        // replace = true: one item per address, overwritten only after a successful login.
+        collection.create_item(&format!("Awan Host Remote SSH: {key}"), attributes, &bytes, true, "application/octet-stream")
+            .context("Login berhasil, tetapi profil gagal disimpan ke keyring")?;
+        Ok(())
+    }
+    pub fn read(address: &str) -> Result<Login> {
+        let service = connect()?;
+        let items = search(&service, Some(address))?;
+        read_item(items.first().context("Login tersimpan tidak ditemukan; gunakan login manual")?)
+    }
+    pub fn list() -> Result<(Vec<Host>, usize)> {
+        let service = connect()?;
+        let items = search(&service, None)?;
+        if items.len() > 1000 { bail!("Daftar keyring melebihi 1.000 profil."); }
+        let mut hosts = Vec::new();
+        let mut skipped = 0;
+        for item in &items {
+            match read_item(item) {
+                Ok(login) => hosts.push(login.host),
+                Err(_) => skipped += 1,
+            }
+        }
+        hosts.sort_by(|a, b| a.address.cmp(&b.address));
+        hosts.dedup_by(|a, b| a.address == b.address);
+        Ok((hosts, skipped))
+    }
+    pub fn delete(address: &str) -> Result<()> {
+        let service = connect()?;
+        for item in search(&service, Some(address))? {
+            item.delete().context("Gagal menghapus login tersimpan")?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
     use super::*;
-    pub fn list() -> Result<(Vec<Host>, usize)> { bail!("Penyimpanan login saat ini tersedia pada Windows. Gunakan login manual pada platform ini."); }
-    pub fn read(_: &str) -> Result<Login> { bail!("Penyimpanan login memerlukan Windows Credential Manager."); }
-    pub fn save(_: &Host, _: &str, _: &str) -> Result<()> { bail!("Penyimpanan login memerlukan Windows Credential Manager."); }
-    pub fn delete(_: &str) -> Result<()> { bail!("Penyimpanan login memerlukan Windows Credential Manager."); }
+    pub fn list() -> Result<(Vec<Host>, usize)> { bail!("Penyimpanan login saat ini tersedia pada Windows dan Linux. Gunakan login manual pada platform ini."); }
+    pub fn read(_: &str) -> Result<Login> { bail!("Penyimpanan login belum tersedia pada platform ini."); }
+    pub fn save(_: &Host, _: &str, _: &str) -> Result<()> { bail!("Penyimpanan login belum tersedia pada platform ini."); }
+    pub fn delete(_: &str) -> Result<()> { bail!("Penyimpanan login belum tersedia pada platform ini."); }
 }
 pub use platform::{read, save};
 

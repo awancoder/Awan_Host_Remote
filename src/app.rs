@@ -1040,7 +1040,7 @@ impl AwanApp {
                 .child(Input::new(&self.secret)
                     .content_type(gpui_kit::component::input::InputContentType::Password)
                     .mask_toggle()));
-            if cfg!(windows) {
+            if cfg!(any(windows, target_os = "linux")) {
                 form = form.child(
                     Checkbox::new("remember-login")
                         .label(t.terminal_remember_login)

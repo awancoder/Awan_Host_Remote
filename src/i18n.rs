@@ -540,7 +540,7 @@ const EN: Strings = Strings {
     terminal_key_path_label: "Private key path (absolute)",
     terminal_passphrase_label: "Passphrase (optional)",
     terminal_password_label: "SSH password",
-    terminal_remember_login: "Save login after success (Windows Credential Manager)",
+    terminal_remember_login: "Save login after success (OS credential store)",
     terminal_connect: "Connect SSH",
     terminal_no_shell_hint: "Connect via SSH to open the server shell.",
 
@@ -904,7 +904,7 @@ const ID: Strings = Strings {
     terminal_key_path_label: "Path private key (absolut)",
     terminal_passphrase_label: "Passphrase (opsional)",
     terminal_password_label: "Password SSH",
-    terminal_remember_login: "Simpan login setelah berhasil (Windows Credential Manager)",
+    terminal_remember_login: "Simpan login setelah berhasil (penyimpanan kredensial OS)",
     terminal_connect: "Sambungkan SSH",
     terminal_no_shell_hint: "Sambungkan SSH untuk membuka shell server.",
 

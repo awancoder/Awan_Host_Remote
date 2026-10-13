@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Awan Host Remote
+Comment=Connect to and manage servers over SSH
+Exec=awan-host-remote
+Icon=awan-host-remote
+Terminal=false
+Categories=Network;RemoteAccess;System;
+Keywords=ssh;server;terminal;docker;
+StartupWMClass=awan-host-remote

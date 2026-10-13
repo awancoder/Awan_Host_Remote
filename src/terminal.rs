@@ -57,7 +57,7 @@ impl Default for Terminal {
             live: crate::live::State::default(),
             connected: false, status: "Belum terhubung".into(), error: None,
             trust: None, key_path: String::new(), secret: String::new(),
-            remember_login: cfg!(windows), profile_saved: None,
+            remember_login: cfg!(any(windows, target_os = "linux")), profile_saved: None,
         }
     }
 }

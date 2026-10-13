@@ -10,7 +10,7 @@ Aplikasi desktop **Rust native** untuk menghubungkan dan mengelola server Linux 
 ### Hosts dan koneksi
 - Tambah host dengan nama, IP/hostname, port SSH, username, dan autentikasi **password** atau **private key** (dengan passphrase).
 - **Verifikasi host key**: host baru menampilkan fingerprint SHA-256 untuk dicocokkan; host key yang berubah ditolak.
-- **Login tersimpan** di Windows Credential Manager (bukan file plaintext), satu profil per alamat IP. Login yang gagal tidak menimpa login lama.
+- **Login tersimpan** di Windows Credential Manager atau keyring Linux (GNOME Keyring/KWallet via Secret Service), bukan file plaintext, satu profil per alamat IP. Login yang gagal tidak menimpa login lama.
 - Beberapa host dapat terhubung bersamaan; sidebar menampilkan setiap host aktif beserta halamannya.
 
 ### Summary
@@ -53,7 +53,7 @@ Tema terang/gelap dan bahasa tampilan (**Indonesia / English**).
 ## Prinsip yang dipegang
 
 - **Data nyata saja**: semua halaman membaca dari server yang terhubung; tidak ada host demo atau data contoh. Informasi yang tidak bisa diambil ditampilkan sebagai tidak tersedia beserta penyebabnya.
-- **Tidak ada kredensial plaintext**: login SSH di Credential Manager; password database tidak pernah diketik, ditampilkan, atau disimpan oleh aplikasi.
+- **Tidak ada kredensial plaintext**: login SSH di Credential Manager / keyring OS; password database tidak pernah diketik, ditampilkan, atau disimpan oleh aplikasi.
 - **Konfirmasi untuk tindakan berisiko**: reboot, shutdown, stop/restart/rebuild/down container, perubahan firewall, penghapusan file, dan query yang mengubah database.
 - **Ringan dan responsif**: semua operasi jaringan berjalan di background dengan channel SSH terpisah per jenis pekerjaan, buffer dan output dibatasi, daftar besar hanya merender baris yang terlihat, dan polling berhenti saat halaman tidak aktif atau host terputus.
 
@@ -61,7 +61,8 @@ Tema terang/gelap dan bahasa tampilan (**Indonesia / English**).
 
 **Komputer lokal**
 - Rust **1.89+** (edition 2024) dan toolchain native platform. Di Windows dengan MSVC: Microsoft C++ Build Tools dan Windows SDK.
-- Login tersimpan saat ini hanya tersedia di **Windows**; Linux/macOS tetap bisa memakai login manual.
+- Di Ubuntu/Linux: driver Vulkan dan library X11/Wayland (lihat [Ubuntu / Linux](#ubuntu--linux)).
+- Login tersimpan tersedia di **Windows** (Credential Manager) dan **Linux** (keyring desktop via Secret Service). Tanpa keyring yang berjalan, atau di macOS, login manual tetap bisa dipakai.
 
 **Server**
 - Linux dengan SSH.
@@ -79,6 +80,25 @@ cargo run --release  # versi teroptimasi
 ```
 
 Pemakaian pertama mengunduh dependency dan melakukan build, jadi butuh waktu lebih lama.
+
+### Ubuntu / Linux
+
+Build langsung di Ubuntu (atau WSL2 dengan WSLg); cross-compile dari Windows tidak didukung.
+
+```bash
+sudo apt install build-essential pkg-config clang cmake   libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev   libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev   libvulkan1 mesa-vulkan-drivers
+cargo run --release
+```
+
+Login tersimpan memerlukan keyring desktop yang berjalan (`gnome-keyring` atau KWallet); jika keyring terkunci, sistem akan meminta Anda membukanya.
+
+Paket `.deb` (berisi binary, entri menu aplikasi, dan ikon):
+
+```bash
+cargo install cargo-deb
+cargo deb                                   # hasil: target/debian/awan-host-remote_<versi>_amd64.deb
+sudo apt install ./target/debian/awan-host-remote_*.deb
+```
 
 ## Teknologi
 
@@ -101,7 +121,7 @@ Pemakaian pertama mengunduh dependency dan melakukan build, jadi butuh waktu leb
 | `src/ssh.rs` | Sesi SSH, verifikasi host key, PTY, dan channel background per jenis pekerjaan. |
 | `src/terminal.rs` | Status sesi per host dan antrean permintaan ke SSH. |
 | `src/terminal_widget.rs` | Widget terminal (render grid, keyboard, salin/tempel). |
-| `src/host_store.rs` | Normalisasi alamat dan penyimpanan login di Windows Credential Manager. |
+| `src/host_store.rs` | Normalisasi alamat dan penyimpanan login di Windows Credential Manager / Secret Service (Linux). |
 | `src/live.rs`, `src/live_remote.py` | Pembacaan Summary/Firewall dan tindakan server (firewall, reboot/shutdown). |
 | `src/remote_file.rs` | Baca/simpan file remote dengan pemeriksaan revisi dan penulisan atomik. |
 | `src/remote_directory.rs`, `.py` | Daftar isi folder remote. |
@@ -111,7 +131,8 @@ Pemakaian pertama mengunduh dependency dan melakukan build, jadi butuh waktu leb
 | `src/docker.rs` | Daftar container, statistik CPU/RAM, dan aksi Docker. |
 | `src/docker_access.rs` | Pemeriksaan akses Docker (grup `docker`). |
 | `src/docker_db.rs` | Query database di container untuk Database Browser. |
-| `build.rs` | Stack thread utama 8 MB di Windows. |
+| `build.rs` | Stack thread utama 8 MB, ikon, dan info versi di Windows. |
+| `packaging/linux/` | Entri `.desktop` untuk paket `.deb`. |
 
 `editor.rs`, `explorer.rs`, `live_views.rs`, `saved_hosts.rs`, dan `views.rs` adalah sisa versi UI lama yang tidak lagi dikompilasi.
 
