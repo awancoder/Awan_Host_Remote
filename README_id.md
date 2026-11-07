@@ -154,3 +154,4 @@ sudo apt install ./target/debian/awan-host-manager_*.deb
 ## Status
 
 Proyek masih dalam pengembangan aktif. Fitur ditulis oleh AI dan diuji secara manual oleh pemilik proyek; belum ada test otomatis. Gunakan server uji terlebih dahulu untuk tindakan yang mengubah sistem (firewall, paket, Docker, query DDL/DML).
+
