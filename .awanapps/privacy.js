@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * .awanapps / privacy.js — Template Kebijakan Privasi (Privacy Policy)
+ * .awanapps / privacy.js - Template Kebijakan Privasi (Privacy Policy)
  * ============================================================================
  *
  * Diisi HANYA jika pada `apps.js` field `privacyPolicyUrl` disetel ke `"local"`.
@@ -26,7 +26,7 @@
  *     - `note`    (string, Opsional): Catatan kaki atau paragraf tambahan setelah bullet points.
  *     - `email`   (string, Opsional): Email dukungan resmi (dirender sebagai link mailto).
  *
- * CATATAN: field `youtube` TIDAK dirender di halaman privacy policy —
+ * CATATAN: field `youtube` TIDAK dirender di halaman privacy policy -
  * field itu khusus untuk `how-to-use.js`.
  *
  * Jumlah dan urutan section pada `en` dan `id` harus SAMA (isi saling terjemahan),
@@ -47,7 +47,7 @@
  *   dan bagaimana pengguna bisa menghapus akun/datanya. Pastikan `is_access_login: true` di `apps.js`.
  * - JIKA ADA ANALYTICS / ADS: Sebutkan pihak ketiganya (Google Analytics, Firebase, AdMob) dan
  *   selaraskan dengan `pricing: "ads"` di `apps.js`. Jika TIDAK ADA, nyatakan secara tegas.
- * - Struktur section di bawah hanya kerangka umum — tambah/kurangi sesuai kebutuhan aplikasi.
+ * - Struktur section di bawah hanya kerangka umum - tambah/kurangi sesuai kebutuhan aplikasi.
  * ============================================================================
  */
 
@@ -63,9 +63,9 @@ export default {
         title: "2. Data Stored on Your Computer",
         content: "Awan Host Manager stores only the minimum data needed to reconnect to your servers, and keeps it on your own computer:",
         points: [
-          "Saved SSH logins — host name, address, SSH port, username, authentication method, private key file path, and the password or key passphrase. These are stored only if you choose to save a login, inside Windows Credential Manager (protected by your Windows account), never in a plaintext file. One profile is kept per normalized IP address.",
-          "Known host keys — the SSH host key of each server you approve is recorded in a known_hosts file in your local application data folder (%LOCALAPPDATA%/awan-host-manager) so the app can detect if a server's identity changes.",
-          "Files you choose to download — database backups are saved only to the location you pick in the Save dialog."
+          "Saved SSH logins - host name, address, SSH port, username, authentication method, private key file path, and the password or key passphrase. These are stored only if you choose to save a login, inside Windows Credential Manager (protected by your Windows account), never in a plaintext file. One profile is kept per normalized IP address.",
+          "Known host keys - the SSH host key of each server you approve is recorded in a known_hosts file in your local application data folder (%LOCALAPPDATA%/awan-host-manager) so the app can detect if a server's identity changes.",
+          "Files you choose to download - database backups are saved only to the location you pick in the Save dialog."
         ],
         note: "You can delete a saved login from the Hosts page (with confirmation), or remove it directly in Windows Credential Manager. Deleting the awan-host-manager folder removes the known host records. Passwords and private key contents are cleared from memory after use and are never written to logs or error messages."
       },
@@ -84,10 +84,10 @@ export default {
         title: "4. Computer Permissions & Access",
         content: "As a desktop application, Awan Host Manager does not request special operating system permissions. It uses only the following resources:",
         points: [
-          "Network access — to open SSH connections to the servers you add.",
-          "Windows Credential Manager — to save and read the SSH logins you choose to keep.",
-          "Local file access — to read private key files you select, import files or folders you pick, and save backups to the location you choose.",
-          "Clipboard — used only when you copy or paste in the terminal."
+          "Network access - to open SSH connections to the servers you add.",
+          "Windows Credential Manager - to save and read the SSH logins you choose to keep.",
+          "Local file access - to read private key files you select, import files or folders you pick, and save backups to the location you choose.",
+          "Clipboard - used only when you copy or paste in the terminal."
         ]
       },
       {
@@ -124,9 +124,9 @@ export default {
         title: "2. Data yang Disimpan di Komputer Anda",
         content: "Awan Host Manager hanya menyimpan data seminimal mungkin untuk menyambung ulang ke server Anda, dan data tersebut tetap berada di komputer Anda:",
         points: [
-          "Login SSH tersimpan — nama host, alamat, port SSH, username, metode autentikasi, path file private key, serta password atau passphrase key. Data ini hanya disimpan jika Anda memilih menyimpan login, di dalam Windows Credential Manager (dilindungi akun Windows Anda), tidak pernah dalam file plaintext. Satu profil disimpan untuk setiap alamat IP yang dinormalisasi.",
-          "Host key yang dikenal — host key SSH setiap server yang Anda setujui dicatat dalam file known_hosts di folder data aplikasi lokal (%LOCALAPPDATA%/awan-host-manager) agar aplikasi dapat mendeteksi jika identitas server berubah.",
-          "File yang Anda pilih untuk diunduh — backup database hanya disimpan di lokasi yang Anda pilih pada dialog Simpan."
+          "Login SSH tersimpan - nama host, alamat, port SSH, username, metode autentikasi, path file private key, serta password atau passphrase key. Data ini hanya disimpan jika Anda memilih menyimpan login, di dalam Windows Credential Manager (dilindungi akun Windows Anda), tidak pernah dalam file plaintext. Satu profil disimpan untuk setiap alamat IP yang dinormalisasi.",
+          "Host key yang dikenal - host key SSH setiap server yang Anda setujui dicatat dalam file known_hosts di folder data aplikasi lokal (%LOCALAPPDATA%/awan-host-manager) agar aplikasi dapat mendeteksi jika identitas server berubah.",
+          "File yang Anda pilih untuk diunduh - backup database hanya disimpan di lokasi yang Anda pilih pada dialog Simpan."
         ],
         note: "Anda dapat menghapus login tersimpan dari halaman Hosts (dengan konfirmasi), atau langsung melalui Windows Credential Manager. Menghapus folder awan-host-manager akan menghapus catatan host yang dikenal. Password dan isi private key dibersihkan dari memori setelah dipakai dan tidak pernah ditulis ke log maupun pesan error."
       },
@@ -145,10 +145,10 @@ export default {
         title: "4. Izin & Akses Komputer",
         content: "Sebagai aplikasi desktop, Awan Host Manager tidak meminta izin khusus sistem operasi. Aplikasi hanya menggunakan sumber daya berikut:",
         points: [
-          "Akses jaringan — untuk membuka koneksi SSH ke server yang Anda tambahkan.",
-          "Windows Credential Manager — untuk menyimpan dan membaca login SSH yang Anda pilih untuk disimpan.",
-          "Akses file lokal — untuk membaca file private key yang Anda pilih, mengimpor file atau folder pilihan Anda, dan menyimpan backup ke lokasi pilihan Anda.",
-          "Clipboard — hanya digunakan saat Anda menyalin atau menempel di terminal."
+          "Akses jaringan - untuk membuka koneksi SSH ke server yang Anda tambahkan.",
+          "Windows Credential Manager - untuk menyimpan dan membaca login SSH yang Anda pilih untuk disimpan.",
+          "Akses file lokal - untuk membaca file private key yang Anda pilih, mengimpor file atau folder pilihan Anda, dan menyimpan backup ke lokasi pilihan Anda.",
+          "Clipboard - hanya digunakan saat Anda menyalin atau menempel di terminal."
         ]
       },
       {

@@ -354,8 +354,8 @@ fn single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Accepts the URL forms `git clone` normally takes over the network —
-/// https/http/ssh/git schemes and scp-like `user@host:path` — and rejects a
+/// Accepts the URL forms `git clone` normally takes over the network -
+/// https/http/ssh/git schemes and scp-like `user@host:path` - and rejects a
 /// leading `-` so the value can never be parsed as a git option.
 pub fn valid_git_url(url: &str) -> bool {
     if url.is_empty() || url.len() > 2048 || url.starts_with('-') || url.chars().any(|c| c.is_control() || c.is_whitespace()) {

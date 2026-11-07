@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * ============================================================================
- * .awanapps / validate.js — Skrip Validasi Otomatis Template Awan Apps
+ * .awanapps / validate.js - Skrip Validasi Otomatis Template Awan Apps
  * ============================================================================
  *
  * Jalankan skrip ini untuk memastikan seluruh data di `.awanapps` sudah valid,
@@ -9,7 +9,7 @@
  *
  *   node .awanapps/validate.js
  *
- * Zero dependency — hanya butuh Node.js 18+.
+ * Zero dependency - hanya butuh Node.js 18+.
  * Folder ini punya `package.json` dengan `"type": "module"` supaya skrip tetap
  * jalan walau project induknya bukan project Node/ESM (Flutter, Android, dll).
  *
@@ -185,7 +185,7 @@ function validateApp(app, index, total) {
   } else if (BADGED_CATEGORIES.includes(app.category)) {
     logPass(`Kategori valid (punya badge warna): "${app.category}"`);
   } else if (CATALOG_CATEGORIES_NO_BADGE.includes(app.category)) {
-    logWarn(`Kategori "${app.category}" dipakai di katalog tapi BELUM punya class \`.badge-cat-${kebab(app.category)}\` di src/app.css — badge akan tampil netral.`);
+    logWarn(`Kategori "${app.category}" dipakai di katalog tapi BELUM punya class \`.badge-cat-${kebab(app.category)}\` di src/app.css - badge akan tampil netral.`);
   } else {
     logWarn(`Kategori "${app.category}" baru (belum ada di katalog). Saat merge, tambahkan class \`.badge-cat-${kebab(app.category)}\` di src/app.css.`);
   }
@@ -231,7 +231,7 @@ function validateApp(app, index, total) {
 
   // 6. Icon
   if (app.icon === null) {
-    logWarn('Icon bernilai `null` — UI akan menampilkan kotak fallback huruf inisial. Sebaiknya siapkan PNG 512x512 transparan.');
+    logWarn('Icon bernilai `null` - UI akan menampilkan kotak fallback huruf inisial. Sebaiknya siapkan PNG 512x512 transparan.');
   } else if (!app.icon || typeof app.icon !== 'string') {
     logFail(`${prefix}Field \`icon\` harus string path ("/assets/logo/{slug}.png"), URL https, atau null.`);
   } else if (app.icon.startsWith('/assets/logo/')) {
@@ -265,7 +265,7 @@ function validateApp(app, index, total) {
   const hasDistribution = ['website', 'googlePlay', 'appStore', 'download', 'mozillaAddOn', 'chromeWebStore']
     .some(f => typeof app[f] === 'string' && app[f]);
   if (!hasDistribution) {
-    logWarn('Belum ada satu pun link distribusi (website/googlePlay/appStore/download/chromeWebStore/mozillaAddOn) — kartu "Unduh & Akses" tidak akan muncul di halaman detail.');
+    logWarn('Belum ada satu pun link distribusi (website/googlePlay/appStore/download/chromeWebStore/mozillaAddOn) - kartu "Unduh & Akses" tidak akan muncul di halaman detail.');
   }
 
   // 9. Release Date
@@ -280,7 +280,7 @@ function validateApp(app, index, total) {
       logPass(`Tanggal rilis: ${app.releaseDate}`);
     }
   } else {
-    logWarn('Field `releaseDate` kosong — baris "Rilis" di halaman detail akan tampil tanpa tanggal.');
+    logWarn('Field `releaseDate` kosong - baris "Rilis" di halaman detail akan tampil tanpa tanggal.');
   }
 
   // 10. pricing & is_access_login
@@ -358,9 +358,9 @@ function validateSectionDocument(doc, docName) {
 
   const isPrivacy = docName.startsWith('privacy');
 
-  // Sisa blok komentar panduan template — harus dihapus sebelum merge
+  // Sisa blok komentar panduan template - harus dihapus sebelum merge
   const raw = readRaw(docName);
-  if (raw && raw.includes('.awanapps / ' + docName + ' — Template')) {
+  if (raw && raw.includes('.awanapps / ' + docName + ' - Template')) {
     logWarn(`${docName} masih memuat blok komentar panduan template. Ganti dengan header pendek saat menyalin ke repo awanapps.`);
   }
 
@@ -406,7 +406,7 @@ function validateSectionDocument(doc, docName) {
         if (!Array.isArray(sec.points)) {
           logFail(`${at} field \`points\` harus berupa array string.`);
         } else if (sec.points.length === 0) {
-          logWarn(`${at} field \`points\` kosong — hapus saja field-nya.`);
+          logWarn(`${at} field \`points\` kosong - hapus saja field-nya.`);
         } else if (sec.points.some(p => typeof p !== 'string' || !p.trim())) {
           logFail(`${at} field \`points\` harus berisi string yang tidak kosong.`);
         }
@@ -450,7 +450,7 @@ function printMergeChecklist(apps) {
   if (typeof app.icon === 'string' && app.icon.startsWith('/assets/logo/')) {
     console.log(`  2. Salin icon PNG ke \`public${app.icon}\`.`);
   } else {
-    console.log(`  2. (Icon eksternal / null — tidak ada asset yang perlu disalin.)`);
+    console.log(`  2. (Icon eksternal / null - tidak ada asset yang perlu disalin.)`);
   }
   if (app.privacyPolicyUrl === 'local') {
     console.log(`  3. Salin privacy.js → \`src/lib/privacy/${app.slug}.js\` + daftarkan di \`src/lib/privacy/index.js\`.`);

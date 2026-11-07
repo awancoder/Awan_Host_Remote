@@ -3,7 +3,7 @@
 //! UI can switch between English and Indonesian at runtime. Backend-originated
 //! status/error strings (ssh.rs, host_store.rs, packages.rs, live.rs,
 //! remote_file.rs, remote_directory.rs, terminal.rs) are not yet routed
-//! through this catalog — see the note in app.rs where `Terminal::status` is
+//! through this catalog - see the note in app.rs where `Terminal::status` is
 //! read.
 //!
 //! Strings that don't actually differ between the two languages (proper
@@ -75,7 +75,7 @@ impl Language {
 
     /// Persists a manual choice from the Settings page so it survives a
     /// restart. Best-effort: a write failure (read-only profile, missing
-    /// permissions) is silently ignored — the app keeps working for the
+    /// permissions) is silently ignored - the app keeps working for the
     /// session, it just re-detects next launch instead of remembering.
     pub fn persist(self) {
         let Some(path) = settings_path() else {
@@ -761,7 +761,7 @@ const EN: Strings = Strings {
     settings_language_heading: "Language",
     settings_language_desc: "Choose the app's display language.",
     settings_about_heading: "About",
-    settings_about_text: "Awan Host Manager — a desktop app for connecting to and controlling servers over SSH.",
+    settings_about_text: "Awan Host Manager - a desktop app for connecting to and controlling servers over SSH.",
     settings_theme_light_desc: "Bright and crisp, for well-lit rooms.",
     settings_theme_dark_desc: "Easier on the eyes at night.",
     settings_info_heading: "Information",
@@ -1178,12 +1178,12 @@ const EN: Strings = Strings {
     git_clone_submit: "Clone",
     git_clone_invalid_url: "Use an https://, ssh://, git:// or user@host:path repository URL.",
     git_clone_busy: "Another server operation is still running. Try again once it finishes.",
-    git_clone_failed_hint: "Git's own message in the terminal panel shows why — usually a wrong URL, a private repository the server has no access to, or an unknown SSH host key.",
+    git_clone_failed_hint: "Git's own message in the terminal panel shows why - usually a wrong URL, a private repository the server has no access to, or an unknown SSH host key.",
     git_clone_https_hint: "This HTTPS URL logs in with a username/token, not the server's SSH key, so it fails for private repositories. Use the SSH URL instead:",
     git_clone_use_ssh: "Use SSH URL",
     git_account_button: "Set up login",
     git_account_manage: "Manage",
-    git_account_missing: "Git SSH login isn't set up on this server — needed for private repositories.",
+    git_account_missing: "Git SSH login isn't set up on this server - needed for private repositories.",
     git_account_title: "Git SSH login",
     git_account_close: "Close",
     git_account_recheck: "Check again",
@@ -1194,7 +1194,7 @@ const EN: Strings = Strings {
     git_step_host_done: "The host key is trusted on this server.",
     git_step_host_pending: "The server has not connected to this provider before.",
     git_step_host_scan: "Fetch fingerprint",
-    git_step_host_trust: "Fingerprint matches — trust it",
+    git_step_host_trust: "Fingerprint matches - trust it",
     git_step_key_title: "2. Add the server's SSH key to your account",
     git_step_key_copy: "Copy public key",
     git_step_key_none: "No SSH key found in ~/.ssh on this server.",
@@ -1221,7 +1221,7 @@ const EN: Strings = Strings {
     confirm_firewall_apply_ok: "Apply",
     confirm_firewall_action_allow: "Allow",
     confirm_firewall_action_close: "Close/remove rule for",
-    confirm_firewall_ssh_warning: " WARNING: this is the active profile's SSH port — closing access can lock you out of your connection.",
+    confirm_firewall_ssh_warning: " WARNING: this is the active profile's SSH port - closing access can lock you out of your connection.",
     firewall_inactive_warning: "UFW is currently inactive. Rules can't be managed until it's enabled.",
     firewall_enable_button: "Enable UFW",
     firewall_no_rules: "No port rules are configured yet.",
@@ -1318,7 +1318,7 @@ const ID: Strings = Strings {
     settings_language_heading: "Bahasa",
     settings_language_desc: "Pilih bahasa tampilan aplikasi.",
     settings_about_heading: "Tentang",
-    settings_about_text: "Awan Host Manager — aplikasi desktop untuk menghubungkan dan mengontrol server melalui SSH.",
+    settings_about_text: "Awan Host Manager - aplikasi desktop untuk menghubungkan dan mengontrol server melalui SSH.",
     settings_theme_light_desc: "Cerah dan bersih, cocok untuk ruangan terang.",
     settings_theme_dark_desc: "Lebih nyaman di mata saat malam.",
     settings_info_heading: "Informasi",
@@ -1735,12 +1735,12 @@ const ID: Strings = Strings {
     git_clone_submit: "Clone",
     git_clone_invalid_url: "Gunakan URL repository https://, ssh://, git:// atau user@host:path.",
     git_clone_busy: "Operasi server lain masih berjalan. Coba lagi setelah selesai.",
-    git_clone_failed_hint: "Pesan git di panel terminal menunjukkan penyebabnya — biasanya URL salah, repository privat yang tidak bisa diakses server, atau host key SSH yang belum dikenal.",
+    git_clone_failed_hint: "Pesan git di panel terminal menunjukkan penyebabnya - biasanya URL salah, repository privat yang tidak bisa diakses server, atau host key SSH yang belum dikenal.",
     git_clone_https_hint: "URL HTTPS ini login memakai username/token, bukan SSH key server, sehingga gagal untuk repository privat. Pakai URL SSH:",
     git_clone_use_ssh: "Pakai URL SSH",
     git_account_button: "Atur login",
     git_account_manage: "Kelola",
-    git_account_missing: "Login SSH Git belum diatur di server ini — diperlukan untuk repository privat.",
+    git_account_missing: "Login SSH Git belum diatur di server ini - diperlukan untuk repository privat.",
     git_account_title: "Login SSH Git",
     git_account_close: "Tutup",
     git_account_recheck: "Periksa ulang",
@@ -1751,7 +1751,7 @@ const ID: Strings = Strings {
     git_step_host_done: "Host key sudah dipercaya di server ini.",
     git_step_host_pending: "Server ini belum pernah terhubung ke penyedia ini.",
     git_step_host_scan: "Ambil fingerprint",
-    git_step_host_trust: "Fingerprint cocok — percayai",
+    git_step_host_trust: "Fingerprint cocok - percayai",
     git_step_key_title: "2. Tambahkan SSH key server ke akun Anda",
     git_step_key_copy: "Salin public key",
     git_step_key_none: "Belum ada SSH key di ~/.ssh pada server ini.",
@@ -1778,7 +1778,7 @@ const ID: Strings = Strings {
     confirm_firewall_apply_ok: "Terapkan",
     confirm_firewall_action_allow: "Mengizinkan",
     confirm_firewall_action_close: "Menutup/menghapus izin",
-    confirm_firewall_ssh_warning: " PERINGATAN: port ini adalah port SSH profil aktif — menutup akses dapat mengunci koneksi Anda.",
+    confirm_firewall_ssh_warning: " PERINGATAN: port ini adalah port SSH profil aktif - menutup akses dapat mengunci koneksi Anda.",
     firewall_inactive_warning: "UFW sedang tidak aktif. Aturan tidak dapat dikelola sampai diaktifkan.",
     firewall_enable_button: "Aktifkan UFW",
     firewall_no_rules: "Belum ada aturan port yang dikonfigurasi.",
@@ -2482,10 +2482,10 @@ pub fn git_push_desc(lang: Language, host: &str, path: &str) -> String {
 pub fn compose_setup_desc(lang: Language, host: &str, user: &str, command: &str) -> String {
     match lang {
         Language::English => format!(
-            "The SSH account \"{user}\" can't use Docker on {host} yet. This one-time step adds \"{user}\" to the docker group (sudo usermod -aG docker {user}), then runs the command right away — later runs skip this step. If sudo asks for a password, type it in the terminal panel.\n\nNote: members of the docker group effectively have root access to this server.\n\n{command}"
+            "The SSH account \"{user}\" can't use Docker on {host} yet. This one-time step adds \"{user}\" to the docker group (sudo usermod -aG docker {user}), then runs the command right away - later runs skip this step. If sudo asks for a password, type it in the terminal panel.\n\nNote: members of the docker group effectively have root access to this server.\n\n{command}"
         ),
         Language::Indonesian => format!(
-            "Akun SSH \"{user}\" belum bisa memakai Docker di {host}. Langkah sekali saja ini menambahkan \"{user}\" ke grup docker (sudo usermod -aG docker {user}), lalu langsung menjalankan perintahnya — berikutnya langkah ini dilewati. Jika sudo meminta password, ketik di panel terminal.\n\nCatatan: anggota grup docker praktis memiliki akses root ke server ini.\n\n{command}"
+            "Akun SSH \"{user}\" belum bisa memakai Docker di {host}. Langkah sekali saja ini menambahkan \"{user}\" ke grup docker (sudo usermod -aG docker {user}), lalu langsung menjalankan perintahnya - berikutnya langkah ini dilewati. Jika sudo meminta password, ketik di panel terminal.\n\nCatatan: anggota grup docker praktis memiliki akses root ke server ini.\n\n{command}"
         ),
     }
 }
@@ -3016,9 +3016,9 @@ pub fn power_confirm_desc(
 
 pub fn power_action_notice(lang: Language, reboot: bool) -> String {
     match (lang, reboot) {
-        (Language::English, true) => "Server is rebooting. This can take a few minutes — reconnect from Hosts once it's back.".into(),
+        (Language::English, true) => "Server is rebooting. This can take a few minutes - reconnect from Hosts once it's back.".into(),
         (Language::English, false) => "Server is shutting down. Reconnect from Hosts once it's back online.".into(),
-        (Language::Indonesian, true) => "Server sedang reboot. Ini bisa memakan beberapa menit — sambungkan ulang dari Hosts setelah server kembali aktif.".into(),
+        (Language::Indonesian, true) => "Server sedang reboot. Ini bisa memakan beberapa menit - sambungkan ulang dari Hosts setelah server kembali aktif.".into(),
         (Language::Indonesian, false) => "Server sedang dimatikan. Sambungkan ulang dari Hosts setelah server aktif kembali.".into(),
     }
 }

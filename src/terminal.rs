@@ -11,7 +11,7 @@ pub struct Terminal {
     pub update_running: bool,
     update_ready: bool,
     pub update_result: Option<String>,
-    /// Whether the last maintenance operation ended with exit code 0 —
+    /// Whether the last maintenance operation ended with exit code 0 -
     /// `update_result` is display text only, so callers that act on the
     /// outcome (e.g. revealing a cloned folder) read this instead.
     pub update_ok: bool,
@@ -197,7 +197,7 @@ impl Terminal {
             // Routed into the same terminal widget as interactive shell
             // output, so a maintenance action's live progress (apt-get/dnf,
             // reboot, firewall changes...) is visible in the terminal panel
-            // — including the persistent footer shown on every page — while
+            // - including the persistent footer shown on every page - while
             // it runs, not just the pass/fail summary once it finishes.
             ssh::Event::UpdateOutput(bytes) => return Some(bytes),
             ssh::Event::UpdateReady => self.update_ready = true,
@@ -370,8 +370,8 @@ impl Terminal {
     }
 
     /// Independent from [`Self::request_file`] (its own SSH channel and busy
-    /// flag) so a file-manager action — new file/folder, rename, move, copy,
-    /// delete, import upload — never has to wait on, or block, the editor's
+    /// flag) so a file-manager action - new file/folder, rename, move, copy,
+    /// delete, import upload - never has to wait on, or block, the editor's
     /// own read/save of the currently open document.
     pub fn request_fs(&mut self, request: crate::remote_fs::Request) -> Result<(), String> {
         request.validate().map_err(|error| error.to_string())?;

@@ -2,7 +2,7 @@
 pub fn command() -> String {
     // `exec </dev/null` first: this (and everything it execs, including
     // dpkg/rpm package post-install scripts) can never read a prompt from
-    // this channel anyway — the interactive shell is a separate channel —
+    // this channel anyway - the interactive shell is a separate channel -
     // so if anything still tries to ask a question, it gets immediate EOF
     // instead of hanging forever with `update_running` stuck true. Belt and
     // suspenders alongside the non-interactive flags below, which are what

@@ -1,10 +1,10 @@
-# .awanapps — Kit Pendaftaran & Integrasi Aplikasi ke Awan Digitals
+# .awanapps - Kit Pendaftaran & Integrasi Aplikasi ke Awan Digitals
 
 Folder `.awanapps` adalah kit pendaftaran portabel yang dapat disalin ke **repositori aplikasi apa pun** (mobile, web app, browser extension, desktop app, game, tools).
 
-Kit ini dirancang agar developer atau **AI coding assistant** di proyek tersebut dapat mengekstrak data asli aplikasi secara akurat, mengisi file metadata, memvalidasinya, dan mempermudah proses penggabungan (*merge*) ke repositori utama katalog [Awan Apps](https://apps.awandigitals.com).
+Kit ini dirancang agar developer atau **AI coding assistant** di proyek tersebut dapat mengekstrak data asli aplikasi secara akurat, mengisi file metadata, memvalidasinya, dan mempermudah proses penggabungan (_merge_) ke repositori utama katalog [Awan Apps](https://apps.awandigitals.com).
 
-> **Kebutuhan:** Node.js 18+ (hanya untuk menjalankan validator). Tidak ada dependensi lain — `npm install` tidak diperlukan.
+> **Kebutuhan:** Node.js 18+ (hanya untuk menjalankan validator). Tidak ada dependensi lain - `npm install` tidak diperlukan.
 
 ---
 
@@ -25,7 +25,7 @@ Kit ini dirancang agar developer atau **AI coding assistant** di proyek tersebut
    ```bash
    node .awanapps/validate.js
    ```
-   Validator sengaja **gagal (exit 1)** selama masih ada teks placeholder bawaan template — jadi data karangan/setengah jadi tidak akan lolos.
+   Validator sengaja **gagal (exit 1)** selama masih ada teks placeholder bawaan template - jadi data karangan/setengah jadi tidak akan lolos.
 4. **Merge** hasil file ke repo `awanapps` mengikuti [Panduan Merge](#-panduan-merge-ke-repo-awanapps).
 
 ---
@@ -35,6 +35,7 @@ Kit ini dirancang agar developer atau **AI coding assistant** di proyek tersebut
 Cukup salin teks di bawah ini dan kirimkan ke AI assistant Anda (Antigravity, Cursor, ChatGPT, Claude, Gemini, Copilot, dll) di repositori proyek Anda:
 
 ### 🇮🇩 Prompt Bahasa Indonesia
+
 ```markdown
 Pelajari codebase proyek ini secara menyeluruh, lalu perbarui file di dalam folder `.awanapps` (`apps.js`, `privacy.js`, dan `how-to-use.js`) dengan data ASLI dan akurat dari proyek ini:
 
@@ -48,6 +49,7 @@ Pelajari codebase proyek ini secara menyeluruh, lalu perbarui file di dalam fold
 ```
 
 ### 🇬🇧 English Prompt
+
 ```markdown
 Thoroughly examine this project codebase, then update the template files inside the `.awanapps` folder (`apps.js`, `privacy.js`, and `how-to-use.js`) with REAL, accurate data from this project:
 
@@ -64,20 +66,20 @@ Thoroughly examine this project codebase, then update the template files inside 
 
 ## 📂 Struktur File Kit `.awanapps`
 
-| File | Deskripsi |
-|---|---|
-| [`apps.js`](./apps.js) | Metadata utama aplikasi (slug, nama, kategori, label, deskripsi, tautan rilis, dsb). |
-| [`privacy.js`](./privacy.js) | Kebijakan privasi lengkap bilingual (`id` & `en`) — diisi jika `privacyPolicyUrl: "local"`. |
-| [`how-to-use.js`](./how-to-use.js) | Panduan langkah penggunaan bilingual (`id` & `en`) — diisi jika `howToUseUrl: "local"`. |
-| [`validate.js`](./validate.js) | Skrip pengujian otomatis mandiri (*zero-dependency*) untuk memverifikasi data. |
-| [`package.json`](./package.json) | Menandai folder ini sebagai ESM agar validator jalan di proyek non-Node (Flutter, Android, dll). Tidak perlu di-merge ke repo awanapps. |
-| `README.md` | Dokumentasi dan petunjuk teknis kit ini. |
+| File                               | Deskripsi                                                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [`apps.js`](./apps.js)             | Metadata utama aplikasi (slug, nama, kategori, label, deskripsi, tautan rilis, dsb).                                                    |
+| [`privacy.js`](./privacy.js)       | Kebijakan privasi lengkap bilingual (`id` & `en`) - diisi jika `privacyPolicyUrl: "local"`.                                             |
+| [`how-to-use.js`](./how-to-use.js) | Panduan langkah penggunaan bilingual (`id` & `en`) - diisi jika `howToUseUrl: "local"`.                                                 |
+| [`validate.js`](./validate.js)     | Skrip pengujian otomatis mandiri (_zero-dependency_) untuk memverifikasi data.                                                          |
+| [`package.json`](./package.json)   | Menandai folder ini sebagai ESM agar validator jalan di proyek non-Node (Flutter, Android, dll). Tidak perlu di-merge ke repo awanapps. |
+| `README.md`                        | Dokumentasi dan petunjuk teknis kit ini.                                                                                                |
 
 ---
 
 ## 🔍 Panduan Penggalian Data Proyek untuk AI
 
-Untuk memastikan akurasi data tanpa mengarang (*no hallucination*), AI harus memeriksa file-file berikut sesuai ekosistem proyek:
+Untuk memastikan akurasi data tanpa mengarang (_no hallucination_), AI harus memeriksa file-file berikut sesuai ekosistem proyek:
 
 - **Browser Extension (Chrome / Firefox / Edge)**:
   - `manifest.json`: Periksa `name`, `version`, `description`, `permissions`, `host_permissions`, `icons`.
@@ -95,24 +97,26 @@ Untuk memastikan akurasi data tanpa mengarang (*no hallucination*), AI harus mem
   - `tauri.conf.json` / `package.json` / file konfigurasi rilis build.
 - **Asset Visual (Icon)**:
   - Siapkan icon aplikasi format **PNG transparan rasio 1:1** (rekomendasi **512x512 px**) untuk nantinya disalin ke `public/assets/logo/{slug}.png` di repo `awanapps`.
-  - Jika icon belum ada, isi `"icon": null` — UI menampilkan kotak fallback berisi huruf inisial nama aplikasi (halaman tetap normal).
+  - Jika icon belum ada, isi `"icon": null` - UI menampilkan kotak fallback berisi huruf inisial nama aplikasi (halaman tetap normal).
 
 ---
 
 ## 📋 Kamus Data & Nilai Standar
 
 ### 1. Kategori (`category`)
+
 String tunggal. Kategori berikut **sudah punya badge warna** di `src/app.css` repo `awanapps`:
 
 `Utilities` · `Productivity` · `Developer Tool` · `Health` · `Accounting` · `Media Social` · `Marketing & Sales` · `Finance` · `Game` · `Design`
 
-Kategori berikut **sudah dipakai di katalog tapi belum punya badge warna** (badge tampil netral — tidak error):
+Kategori berikut **sudah dipakai di katalog tapi belum punya badge warna** (badge tampil netral - tidak error):
 
 `Health & Fitness` · `Video Editor` · `Tools` · `Education` · `Travel & Local`
 
 Boleh memakai kategori baru, tetapi saat merge tambahkan class `.badge-cat-{kategori-kebab-case}` di `src/app.css` (misal `Travel & Local` → `.badge-cat-travel-local`).
 
 ### 2. Label Platform (`label`)
+
 Array string platform aplikasi (bisa lebih dari satu, misal: `["Extension", "Web App"]`). Semua nilai berikut sudah punya badge warna:
 
 `Web App` · `Desktop` · `Mobile` · `Extension` · `Game`
@@ -120,25 +124,29 @@ Array string platform aplikasi (bisa lebih dari satu, misal: `["Extension", "Web
 Label baru memerlukan class `.badge-val-{label-kebab-case}` di `src/app.css`.
 
 ### 3. Opsi Biaya & Akses Login (`pricing` & `is_access_login`)
+
 Field ini opsional dengan nilai default:
+
 - `pricing`:
-  - `"free"` *(default)* : **Gratis** — tidak perlu ditulis, otomatis tampil *"Gratis"* / *"Free"*.
-  - `"ads"` : **Berisi Iklan** — otomatis tampil *"Berisi Iklan"* / *"Contains Ads"*.
-  - `"paid"` : **Berbayar** — otomatis tampil *"Berbayar"* / *"Paid"*.
-- `is_access_login`: Tulis `"is_access_login": true` hanya jika memerlukan login/akun. Tanpa akun **tidak perlu ditulis** (otomatis *"Tanpa Login"* / *"No Sign-in"*).
+  - `"free"` _(default)_ : **Gratis** - tidak perlu ditulis, otomatis tampil _"Gratis"_ / _"Free"_.
+  - `"ads"` : **Berisi Iklan** - otomatis tampil _"Berisi Iklan"_ / _"Contains Ads"_.
+  - `"paid"` : **Berbayar** - otomatis tampil _"Berbayar"_ / _"Paid"_.
+- `is_access_login`: Tulis `"is_access_login": true` hanya jika memerlukan login/akun. Tanpa akun **tidak perlu ditulis** (otomatis _"Tanpa Login"_ / _"No Sign-in"_).
 
 Konsistensi: `pricing: "ads"` harus sejalan dengan penyebutan SDK iklan di `privacy.js`, dan `is_access_login: true` harus sejalan dengan penjelasan akun/backend di `privacy.js`.
 
 ### 4. Mode Kebijakan Privasi & Panduan (`privacyPolicyUrl` & `howToUseUrl`)
+
 Keduanya opsional (default `null`):
 
-| Nilai | `privacyPolicyUrl` | `howToUseUrl` |
-|---|---|---|
-| `"local"` | Konten dibaca dari `src/lib/privacy/{slug}.js` | Konten dibaca dari `src/lib/how-to-use/{slug}.js` |
-| `"https://..."` | Tombol menuju kebijakan eksternal | Tombol menuju panduan eksternal |
+| Nilai                  | `privacyPolicyUrl`                                                         | `howToUseUrl`                                                                    |
+| ---------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `"local"`              | Konten dibaca dari `src/lib/privacy/{slug}.js`                             | Konten dibaca dari `src/lib/how-to-use/{slug}.js`                                |
+| `"https://..."`        | Tombol menuju kebijakan eksternal                                          | Tombol menuju panduan eksternal                                                  |
 | `null` / tidak ditulis | Halaman `/{slug}/privacy-policy` tetap ada, memakai teks kebijakan generik | Kartu panduan disembunyikan, `/{slug}/how-to-use` jadi 404 & tidak masuk sitemap |
 
 ### 5. Link (`website`, `googlePlay`, `appStore`, `download`, `chromeWebStore`, `mozillaAddOn`, `facebookGroup`, `telegramChannel`, `telegramGroup`)
+
 Semua opsional, harus diawali `https://` atau bernilai `null`. Kartu "Unduh & Akses" hanya muncul jika minimal satu link distribusi terisi; section "Komunitas" hanya muncul jika minimal satu link komunitas terisi.
 
 ---
@@ -166,23 +174,23 @@ Setelah 0 error, validator mencetak checklist merge yang sudah terisi slug aplik
 Setelah data di `.awanapps` lolos `node .awanapps/validate.js`, lakukan langkah berikut di repo `awanapps`:
 
 1. **Tambahkan Metadata ke `apps.json`**:
-   Buka `apps.json` di root repo `awanapps`, tambahkan objek dari `apps.js` ke dalam array JSON (hapus komentar — `apps.json` adalah JSON murni, bukan JS).
-2. **Tambahkan Privacy Policy Lokal** *(jika `privacyPolicyUrl: "local"`)*:
+   Buka `apps.json` di root repo `awanapps`, tambahkan objek dari `apps.js` ke dalam array JSON (hapus komentar - `apps.json` adalah JSON murni, bukan JS).
+2. **Tambahkan Privacy Policy Lokal** _(jika `privacyPolicyUrl: "local"`)_:
    - Salin isi `privacy.js` ke file baru: `src/lib/privacy/{slug}.js`, **ganti blok komentar panduan template dengan header pendek** (`{Nama App} - Privacy Policy Content`).
    - Buka `src/lib/privacy/index.js`, import file tersebut dan daftarkan key `{slug}` pada objek `privacyData`.
-3. **Tambahkan Panduan Penggunaan Lokal** *(jika `howToUseUrl: "local"`)*:
+3. **Tambahkan Panduan Penggunaan Lokal** _(jika `howToUseUrl: "local"`)_:
    - Salin isi `how-to-use.js` ke file baru: `src/lib/how-to-use/{slug}.js` (ganti header seperti langkah 2).
    - Buka `src/lib/how-to-use/index.js`, import file tersebut dan daftarkan key `{slug}` pada objek `howToUseData`.
 4. **Salin Logo / Icon Aplikasi**:
    Simpan icon PNG aplikasi di `public/assets/logo/{slug}.png` (lewati langkah ini jika `icon` bernilai `null` atau URL eksternal).
-5. **Tambahkan Badge CSS** *(hanya jika memakai kategori/label yang belum punya warna)*:
+5. **Tambahkan Badge CSS** _(hanya jika memakai kategori/label yang belum punya warna)_:
    Tambahkan `.badge-cat-{kategori}` / `.badge-val-{label}` di `src/app.css`.
 6. **Uji Tampilan & Build**:
    ```bash
    npm run dev    # Cek halaman /{slug}, /{slug}/privacy-policy, /{slug}/how-to-use
    npm run build  # Pastikan bundle build berhasil tanpa error
    ```
-   Sitemap (`/sitemap.xml`) dibuat otomatis dari `apps.json` — tidak ada file yang perlu diedit manual.
+   Sitemap (`/sitemap.xml`) dibuat otomatis dari `apps.json` - tidak ada file yang perlu diedit manual.
 7. **Naikkan versi** di `package.json` repo `awanapps` lalu commit & push ke `main` (deploy Vercel berjalan otomatis).
 
-> Folder `.awanapps` **tidak perlu ikut di-merge** ke repo `awanapps` — cukup file hasilnya. Biarkan folder ini tetap ada di repo aplikasi Anda sebagai sumber data saat metadata perlu diperbarui.
+> Folder `.awanapps` **tidak perlu ikut di-merge** ke repo `awanapps` - cukup file hasilnya. Biarkan folder ini tetap ada di repo aplikasi Anda sebagai sumber data saat metadata perlu diperbarui.

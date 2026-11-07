@@ -13,7 +13,7 @@ pub enum Page {
     Stalwart,
     Tools,
     Hosts,
-    /// Global app preferences, not a per-host workspace page — reachable
+    /// Global app preferences, not a per-host workspace page - reachable
     /// from the sidebar footer regardless of connection state, so it is
     /// deliberately excluded from [`Self::ALL`].
     Settings,

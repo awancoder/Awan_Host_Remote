@@ -1,12 +1,12 @@
 /**
  * ============================================================================
- * .awanapps / apps.js — Template Metadata Aplikasi untuk Awan Digitals
+ * .awanapps / apps.js - Template Metadata Aplikasi untuk Awan Digitals
  * ============================================================================
  *
  * File ini berisi metadata aplikasi yang nantinya akan ditambahkan ke array
  * `apps.json` di root repositori `awanapps` (https://apps.awandigitals.com).
  *
- * Isi dengan data ASLI dari codebase project ini — jangan mengarang.
+ * Isi dengan data ASLI dari codebase project ini - jangan mengarang.
  * Setelah selesai, jalankan: `node .awanapps/validate.js`
  *
  * ----------------------------------------------------------------------------
@@ -35,7 +35,7 @@
  *      - "Game"
  *      - "Design"
  *    - Kategori yang SUDAH DIPAKAI di katalog tapi BELUM punya badge warna
- *      (badge tetap tampil dengan warna netral — tidak error):
+ *      (badge tetap tampil dengan warna netral - tidak error):
  *      - "Health & Fitness"
  *      - "Video Editor"
  *      - "Tools"
@@ -71,7 +71,7 @@
  *      nantinya disalin ke `public/assets/logo/{slug}.png` di repo awanapps.
  *    - Boleh juga URL absolut `https://...` (misal favicon dari domain app sendiri).
  *    - Jika diisi `null` (atau gambar gagal dimuat), UI otomatis menampilkan
- *      kotak fallback berisi huruf inisial nama aplikasi — halaman tetap normal.
+ *      kotak fallback berisi huruf inisial nama aplikasi - halaman tetap normal.
  *
  * 8. image (Opsional):
  *    - URL gambar banner / preview / screenshot (rasio 2:1 atau 16:9).
@@ -97,7 +97,7 @@
  *     - Section "Komunitas" hanya muncul kalau minimal salah satu terisi.
  *
  * 11. pricing (Opsional, string, default: "free"):
- *     - "free" (default) : Gratis — tidak perlu ditulis jika aplikasi gratis.
+ *     - "free" (default) : Gratis - tidak perlu ditulis jika aplikasi gratis.
  *     - "ads"            : Berisi Iklan (tulis `"pricing": "ads"`).
  *     - "paid"           : Berbayar (tulis `"pricing": "paid"`).
  *
@@ -122,7 +122,7 @@
  *     - "https://..." : Tombol membuka tautan panduan eksternal di tab baru.
  *     - null / tidak ditulis : Kartu panduan tidak ditampilkan, halaman
  *                       `/{slug}/how-to-use` mengembalikan 404 dan tidak masuk sitemap.
- *     - Sebagian besar app di katalog TIDAK memakai field ini — isi "local"
+ *     - Sebagian besar app di katalog TIDAK memakai field ini - isi "local"
  *       hanya kalau memang menulis panduan di `.awanapps/how-to-use.js`.
  * ============================================================================
  */

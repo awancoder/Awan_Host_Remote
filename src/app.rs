@@ -29,11 +29,11 @@ use crate::model::{Host, HostForm, Page};
 use crate::{host_store, ssh, terminal_widget::TerminalWidget};
 
 /// One host's live SSH state: its shell session (connection, status, live
-/// Summary/Control/Ports/Database data — all nested inside `Terminal`
+/// Summary/Control/Ports/Database data - all nested inside `Terminal`
 /// already) plus the terminal widget rendering its PTY. Kept per host
 /// (keyed by the host's normalized address, the same stable identity
 /// `host_store` uses) so connecting to a second host does not tear down
-/// the first — only an explicit Disconnect, or deleting the host profile,
+/// the first - only an explicit Disconnect, or deleting the host profile,
 /// does that.
 #[derive(Default)]
 struct Session {
@@ -49,7 +49,7 @@ struct FsClipboardEntry {
     is_dir: bool,
 }
 
-/// What the shared `fs_name_input` dialog is currently being used for — New
+/// What the shared `fs_name_input` dialog is currently being used for - New
 /// File/Folder need the parent folder the name goes under; Rename/Move need
 /// the source path being renamed/relocated.
 enum FsPending {
@@ -119,10 +119,10 @@ pub struct AwanApp {
     /// UI display language. Covers every string this file renders; backend
     /// status/error text (ssh.rs, host_store.rs, packages.rs, live.rs,
     /// remote_file.rs, remote_directory.rs, terminal.rs) is not yet routed
-    /// through the catalog — see the note on `terminal.status` below.
+    /// through the catalog - see the note on `terminal.status` below.
     lang: Language,
     hosts: Vec<Host>,
-    /// Which host's page is currently being viewed — independent of which
+    /// Which host's page is currently being viewed - independent of which
     /// hosts are connected (see [`Session`]/[`Self::sessions`]).
     active: Option<usize>,
     notice: Option<String>,
@@ -135,7 +135,7 @@ pub struct AwanApp {
     host_store: host_store::Store,
     host_store_message: Option<String>,
     /// Which connected hosts' Workspace page lists are expanded in the
-    /// sidebar — independent of `active`/`page`: clicking a host row only
+    /// sidebar - independent of `active`/`page`: clicking a host row only
     /// expands/collapses its own menu (any number of hosts can be expanded
     /// at once) so the user can see the options (or close them) without
     /// jumping the main panel to that host's Summary. Only clicking an
@@ -433,14 +433,14 @@ impl AwanApp {
     fn active_address(&self) -> Option<String> { self.active_host().map(|host| host.address.clone()) }
 
     /// The active host's session state, or a standing empty/disconnected
-    /// one when there isn't an active host or it has never connected —
+    /// one when there isn't an active host or it has never connected -
     /// callers don't need an `Option` at every read site.
     fn terminal(&self) -> &crate::terminal::Terminal {
         self.active_address().and_then(|address| self.sessions.get(&address)).map(|s| &s.terminal).unwrap_or(&self.empty_session.terminal)
     }
 
     /// Like [`Self::terminal`], but creates the active host's session entry
-    /// on first write instead of falling back to the empty one — so a
+    /// on first write instead of falling back to the empty one - so a
     /// connect actually persists. With no active host, mutations land on
     /// the throwaway empty session (callers that can run with no host
     /// selected don't need to special-case this).
@@ -458,7 +458,7 @@ impl AwanApp {
     fn active_host(&self) -> Option<&Host> { self.active.and_then(|index| self.hosts.get(index)) }
 
     /// Switches which host's page is being viewed, and to which page. Does
-    /// **not** touch that host's (or any other host's) session —
+    /// **not** touch that host's (or any other host's) session -
     /// connecting/disconnecting is explicit (see [`Self::start_session`] and
     /// the Terminal page's Disconnect button), so other connected hosts stay
     /// live in the background and keep listing in the sidebar.
@@ -475,7 +475,7 @@ impl AwanApp {
         let _ = (window, cx);
     }
 
-    /// Activates a host on its default page (Summary) — used when the user
+    /// Activates a host on its default page (Summary) - used when the user
     /// explicitly picks a host to view from outside the sidebar (the Hosts
     /// page's Connect button, or right after adding a new host).
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -484,7 +484,7 @@ impl AwanApp {
 
     /// Connects (with the saved login) or restarts the view for a host
     /// picked from the Hosts page, without jumping into its workspace until
-    /// the connection is actually confirmed — `start_session`'s event loop
+    /// the connection is actually confirmed - `start_session`'s event loop
     /// calls `activate` for this host once it reports `Ready` (see
     /// `connecting_focus`). Showing the sidebar's per-host pages and the
     /// Summary view before that point made a stalled or failed connection
@@ -500,7 +500,7 @@ impl AwanApp {
         // `start_session` (and the `terminal_mut()`/`terminal()` calls it
         // makes before it starts keying everything off `host.address`) acts
         // on whichever host `active` currently points to, so it has to be
-        // this one *before* either runs — only the page/sidebar reveal
+        // this one *before* either runs - only the page/sidebar reveal
         // waits for the confirmed connection.
         self.active = Some(index);
         self.connecting_focus = Some(host.address.clone());
@@ -511,7 +511,7 @@ impl AwanApp {
         if host.saved {
             self.start_session(&host, true, window, cx);
         } else {
-            // No saved login to connect with yet — land on this host's
+            // No saved login to connect with yet - land on this host's
             // Terminal page, where the password/key form lives, instead of
             // an empty, not-yet-connected Summary.
             self.switch_to(index, Page::Terminal, window, cx);
@@ -531,7 +531,7 @@ impl AwanApp {
     }
 
     /// Once the host being viewed is no longer connected, its pages can
-    /// only show stale or "Unknown" data — go back to Hosts, where it can
+    /// only show stale or "Unknown" data - go back to Hosts, where it can
     /// be reconnected. Settings and About are not tied to a host, so they stay.
     fn leave_host_pages(&mut self, address: &str) {
         if self.active_address().as_deref() == Some(address) && !matches!(self.page, Page::Hosts | Page::Settings | Page::About) {
@@ -631,7 +631,7 @@ impl AwanApp {
     }
 
     /// Requests fresh data for whichever live page is currently open, on
-    /// that page's own refresh interval — ticked from the timer loop in
+    /// that page's own refresh interval - ticked from the timer loop in
     /// `new()`, and also immediately upon switching pages or connecting.
     /// Initial load is always performed on first open even if auto-refresh is off.
     fn poll_live_page(&mut self, cx: &mut Context<Self>) {
@@ -708,8 +708,8 @@ impl AwanApp {
     /// the task that drains SSH events and creates the terminal widget once
     /// the session is established enough to exist. The spawned task
     /// captures `host.address` and always routes back to that host's
-    /// session — not whichever one happens to be active when an event
-    /// arrives — so switching to a different host mid-connect (or while
+    /// session - not whichever one happens to be active when an event
+    /// arrives - so switching to a different host mid-connect (or while
     /// several are live at once) can't cross-wire their output.
     fn start_session(&mut self, host: &Host, use_saved: bool, window: &mut Window, cx: &mut Context<Self>) {
         // `Terminal::connect`/`connect_saved` read credentials off
@@ -743,7 +743,7 @@ impl AwanApp {
         self.sessions.entry(address.clone()).or_default().widget = Some(widget.clone());
 
         // `_in` so `handle_file_result` can reach `window` (needed to write
-        // into the editor's `EditorState`) — a plain `cx.spawn` only hands
+        // into the editor's `EditorState`) - a plain `cx.spawn` only hands
         // the closure a `Context`, with no window access.
         cx.spawn_in(window, async move |this, cx| {
             let mut events = events;
@@ -1005,11 +1005,11 @@ impl AwanApp {
                 .on_click(cx.listener(|this, _, _, cx| { this.page = Page::Hosts; cx.notify(); })),
         );
 
-        // Every connected host appears here, not just the one being viewed —
+        // Every connected host appears here, not just the one being viewed -
         // connecting to a second host does not close the first (see
         // `Session`/`start_session`), so both stay listed until each is
         // explicitly disconnected. A host that's still connecting (or that
-        // failed) does not get its workspace pages revealed yet — showing
+        // failed) does not get its workspace pages revealed yet - showing
         // them before the session is actually up made a stalled or failed
         // connection look like a live, fully-loaded one; progress for that
         // case is visible on the Hosts page's own row instead.
@@ -1025,7 +1025,7 @@ impl AwanApp {
                 SidebarMenuItem::new(host.name.clone())
                     .icon(IconName::HardDrive)
                     .active(is_active)
-                    // Only expands/collapses this host's page list — it does
+                    // Only expands/collapses this host's page list - it does
                     // not switch which host's page is being viewed, so the
                     // user can look at (or close) the menu for any number of
                     // hosts at once without navigating away from whichever
@@ -1099,7 +1099,7 @@ impl AwanApp {
         match self.page {
             // These manage their own internal layout/scrolling (the
             // terminal canvas needs real pixel bounds; the editor already
-            // scrolls its explorer panel and text area) — wrapping them in
+            // scrolls its explorer panel and text area) - wrapping them in
             // another scroll container would fight that, not help it.
             Page::Terminal => self.render_terminal(window, cx),
             Page::Editor => self.render_editor(window, cx),
@@ -1383,7 +1383,7 @@ impl AwanApp {
             let live = session.is_some_and(|s| s.terminal.connected || s.terminal.busy());
             // Connecting now stays on this page instead of jumping straight
             // into the (not-yet-live) workspace, so this row is the only
-            // place that progress or a failure is visible — show it here.
+            // place that progress or a failure is visible - show it here.
             let connecting = session.filter(|s| s.terminal.busy() && !s.terminal.connected).map(|s| s.terminal.status.clone());
             let error = session.filter(|s| !s.terminal.busy() && !s.terminal.connected).and_then(|s| s.terminal.error.clone());
             // While a saved profile is being rewritten (or deleted), its row
@@ -1533,7 +1533,7 @@ impl AwanApp {
     }
 
     /// Summary's CPU/RAM chart: the app's own 5 s samples for `Range::Live`,
-    /// or sysstat's archive on the server for 24 h / 7 d / 30 d — with an
+    /// or sysstat's archive on the server for 24 h / 7 d / 30 d - with an
     /// Install/Enable sysstat action when the server has nothing recorded.
     fn render_history_card(&self, muted: Hsla, radius: Pixels, border: Hsla, cpu_color: Hsla, can_manage: bool, cx: &Context<Self>) -> AnyElement {
         use crate::live::{Kind, Range, Request};
@@ -1589,7 +1589,7 @@ impl AwanApp {
             h_flex().gap_1().items_center().text_xs()
                 .child(div().size(px(8.)).rounded_full().bg(color))
                 .child(div().text_color(muted).child(name.to_string()))
-                .child(div().font_bold().child(value.map(|v| format!("{v:.1}%")).unwrap_or_else(|| "—".into())))
+                .child(div().font_bold().child(value.map(|v| format!("{v:.1}%")).unwrap_or_else(|| "-".into())))
         };
         let note = if range == Range::Live { t.summary_history_note } else { t.summary_archive_note };
         let mut card = v_flex().gap_2().p_3().rounded(radius).border_1().border_color(border)
@@ -1747,7 +1747,7 @@ impl AwanApp {
                 .bg(linear_gradient(135., linear_color_stop(color.opacity(0.10), 0.), linear_color_stop(color.opacity(0.0), 0.7)))
                 .child(
                     ProgressCircle::new(id).value(percent.unwrap_or(0.0) as f32).color(color).size(px(64.)).flex_shrink_0()
-                        .child(div().text_xs().font_bold().text_color(color).child(percent.map(|p| format!("{p:.0}%")).unwrap_or_else(|| "—".into()))),
+                        .child(div().text_xs().font_bold().text_color(color).child(percent.map(|p| format!("{p:.0}%")).unwrap_or_else(|| "-".into()))),
                 )
                 .child(
                     v_flex().min_w_0().gap_1()
@@ -1882,8 +1882,8 @@ impl AwanApp {
         let mut content = v_flex().w_full().p_4().gap_3().child(status);
 
         // UFW rejects allow/deny while inactive anyway (see `live.rs`), so
-        // surface an explicit "enable first" step at the very top — before
-        // the raw rule dumps and manage controls — instead of letting the
+        // surface an explicit "enable first" step at the very top - before
+        // the raw rule dumps and manage controls - instead of letting the
         // user scroll past all of that only to hit a disabled button.
         let ufw_inactive = self.firewall_engine == "ufw" && self.terminal().live.data[crate::live::Kind::Ports.index()].as_ref().is_some_and(|report| {
             report.rows.iter().any(|row| row.len() == 3 && row[0] == "firewall" && row[1] == "ufw" && !row[2].trim_start().starts_with("Status: active"))
@@ -1891,7 +1891,7 @@ impl AwanApp {
         if ufw_inactive {
             // While UFW is inactive, the raw per-engine dumps below are
             // just noise in front of the one action that matters (enable
-            // it first) — skip straight to that instead of showing them.
+            // it first) - skip straight to that instead of showing them.
             content = content.child(div().text_xs().text_color(cx.theme().yellow).child(t.firewall_inactive_warning));
             content = content.child(
                 Button::new("fw-enable").label(t.firewall_enable_button).disabled(!can_manage)
@@ -2373,7 +2373,7 @@ impl AwanApp {
     }
 
     /// Routes a finished file operation to the explorer (directory listing)
-    /// or the editor (read/save), based on which one is waiting — mirrors
+    /// or the editor (read/save), based on which one is waiting - mirrors
     /// the old `Editor::finish`.
     fn handle_file_result(&mut self, result: Result<crate::remote_file::Reply, String>, window: &mut Window, cx: &mut Context<Self>) {
         use crate::remote_file::Reply;
@@ -2579,7 +2579,7 @@ impl AwanApp {
 
     /// Routes a finished file-manager operation (or one step of an Import
     /// batch) back into the Explorer. An Import batch only refreshes the
-    /// tree once, when the whole batch finishes — not per item — both to
+    /// tree once, when the whole batch finishes - not per item - both to
     /// avoid dozens of redundant listings for one multi-file import and so
     /// the tree does not visibly flicker/reset while it is still running.
     fn handle_fs_result(&mut self, result: Result<crate::remote_fs::Reply, String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -2660,7 +2660,7 @@ impl AwanApp {
     }
 
     /// Sends the next queued Import step (a remote `mkdir` or one local
-    /// file's bytes), one at a time — the fs channel only runs a single
+    /// file's bytes), one at a time - the fs channel only runs a single
     /// operation at once. A local file that fails to read is skipped
     /// (tallied in `import_failed`) rather than aborting the whole batch;
     /// a request that fails to even start (disconnected, queue full) aborts
@@ -2705,7 +2705,7 @@ impl AwanApp {
     }
 
     /// Builds the Import queue: for a folder, walks it recursively (local
-    /// metadata only — file bytes are read lazily, one at a time, by
+    /// metadata only - file bytes are read lazily, one at a time, by
     /// `advance_import_queue`) so a large tree never holds more than one
     /// file's content in memory at once. Unreadable local entries are
     /// skipped (counted, not silently dropped) rather than aborting.
@@ -3330,7 +3330,7 @@ impl AwanApp {
     }
 
     /// Shared single-field dialog (New File/New Folder/Rename/Move all just
-    /// need one text value) — which request submitting it builds is decided
+    /// need one text value) - which request submitting it builds is decided
     /// by `self.fs_pending`, set by the caller right before this opens.
     /// `location`, for New File/Folder, is shown so the user can see which
     /// folder the new entry goes into before creating it.
@@ -3602,7 +3602,7 @@ impl AwanApp {
         let folder = if folder.is_empty() { "/" } else { folder };
         let compose = format!("docker compose -f {} up -d --build", shell_quote(file));
         // `sg docker -c` applies the docker group to this one command, so it
-        // works right away — even in a shell that logged in before the user
+        // works right away - even in a shell that logged in before the user
         // was added (where `docker info` still fails), with no reconnect.
         let command_line = match &setup_for {
             Some(_) => format!("cd -- {} && sudo usermod -aG docker \"$USER\" && sg docker -c {}", shell_quote(folder), shell_quote(&compose)),
@@ -3910,7 +3910,7 @@ impl AwanApp {
                 .when(state.busy, |row| row.child(Spinner::new().small().color(muted)).child(div().text_xs().text_color(muted).child(t.stalwart_checking))))
             .child(div().text_xs().text_color(muted).child(t.stalwart_hostname_hint));
         if state.report.is_some() {
-            header = header.child(div().text_xs().child(i18n::stalwart_domain(lang, &domain, if server_ip.is_empty() { "—" } else { &server_ip })));
+            header = header.child(div().text_xs().child(i18n::stalwart_domain(lang, &domain, if server_ip.is_empty() { "-" } else { &server_ip })));
         }
         if let Some(error) = &state.error {
             header = header.child(notice_row(Lucide::CircleAlert, red, radius, error.clone()));
@@ -4197,7 +4197,7 @@ impl AwanApp {
         let t = self.t();
         let entity = cx.entity();
         let table_label = table.label();
-        let title = format!("{} — {}", t.db_truncate_dialog_title, table_label);
+        let title = format!("{} - {}", t.db_truncate_dialog_title, table_label);
         let warning = format!("{} ({}.{})", t.db_truncate_dialog_warning, db, table_label);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let entity = entity.clone();
@@ -5487,7 +5487,7 @@ impl AwanApp {
             // A plain `let` closure (not inlined into `.context_menu(...)`)
             // because `ContextMenuExt::context_menu` returns a wrapper type
             // (`ContextMenu<_>`, not `Self`), which `row = row.when(...)`
-            // reassignment cannot accept — this builder is applied once,
+            // reassignment cannot accept - this builder is applied once,
             // last, right when `row` turns into `AnyElement` below.
             let menu_builder = move |menu: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>| -> PopupMenu {
                 let mut menu = menu;
@@ -5840,7 +5840,7 @@ impl AwanApp {
     /// `confirm_maintenance`: the SSH connection is about to die along with
     /// the server, so waiting on the usual `update_running`/`UpdateEnd`
     /// flow for a pass/fail would mean sitting there until the connection
-    /// eventually times out (what was happening before — the UI looked like
+    /// eventually times out (what was happening before - the UI looked like
     /// nothing was happening, then got stuck). Instead this fires a
     /// notification right away and proactively disconnects the session
     /// itself shortly after, so the host visibly goes back to "not
@@ -5870,7 +5870,7 @@ impl AwanApp {
                         let address = address.clone();
                         // A couple of seconds to let the command actually
                         // reach the server before we tear our own side
-                        // down — we are not waiting for it to answer back,
+                        // down - we are not waiting for it to answer back,
                         // since by design it won't.
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
@@ -5954,7 +5954,7 @@ impl AwanApp {
         );
     }
 
-    /// Whether there is a persistent terminal panel to show at all — a live
+    /// Whether there is a persistent terminal panel to show at all - a live
     /// session for the active host, and not already on the full Terminal
     /// page (which shows the same widget by itself).
     fn has_terminal_footer(&self) -> bool {
@@ -6014,7 +6014,7 @@ impl AwanApp {
     }
 
     /// Tabs + the active host's live terminal widget, filling whatever
-    /// space the caller gives it — used both docked (inside the resizable
+    /// space the caller gives it - used both docked (inside the resizable
     /// split) and fullscreen (filling the whole content area).
     fn render_terminal_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let tabs = self.render_terminal_tabs(cx);
@@ -6026,7 +6026,7 @@ impl AwanApp {
     }
 
     /// The slim strip shown instead of the terminal panel once the user has
-    /// closed it — click it (or the chevron) to bring it back, rather than
+    /// closed it - click it (or the chevron) to bring it back, rather than
     /// losing track of the session entirely.
     fn render_terminal_reopen_strip(&self, cx: &Context<Self>) -> AnyElement {
         let t = self.t();
@@ -6115,8 +6115,8 @@ impl Render for AwanApp {
 
 impl AwanApp {
     /// While the terminal tab bar is being dragged, a zero-size canvas that
-    /// registers window-level mouse listeners — the same technique the
-    /// component library's own resize handle uses — so the drag keeps
+    /// registers window-level mouse listeners - the same technique the
+    /// component library's own resize handle uses - so the drag keeps
     /// tracking when the cursor moves over the terminal or editor below
     /// (an element-level listener would stop at whatever is under it).
     fn terminal_drag_tracker(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -6154,12 +6154,12 @@ impl AwanApp {
 }
 
 /// The component library's own `.danger()` variant renders as a soft,
-/// low-contrast tint in this theme — too weak to read as clearly destructive
+/// low-contrast tint in this theme - too weak to read as clearly destructive
 /// for actions like Disconnect/Delete/Reboot/Uninstall. `ButtonVariant::Custom`
 /// looks even softer: the library always mixes 20% transparency into a
 /// custom background (and fades it further still when disabled), so it was
 /// never actually going to come out solid. Overriding `.bg()`/`.text_color()`
-/// directly on top of `.danger()` does work — those calls refine the
+/// directly on top of `.danger()` does work - those calls refine the
 /// button's style *after* the variant's own colors are computed, so they win.
 fn solid_danger(button: Button) -> Button {
     button.danger().bg(rgb(0xDC2626)).text_color(white())
