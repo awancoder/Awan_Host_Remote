@@ -40,6 +40,7 @@ pub enum Event {
     Docker(Result<crate::docker_access::Access, String>),
     DockerList(Result<Vec<crate::docker::Container>, String>),
     DockerStats(Result<crate::docker::Stats, String>),
+    DockerResources(Result<crate::docker::Resources, String>),
     DockerOutput(Vec<u8>),
     DockerEnd(Result<(), String>),
     /// Bytes of a backup written to the local file so far.
@@ -47,6 +48,9 @@ pub enum Event {
     /// Container name the query ran in, and its result.
     DockerDb(String, Result<crate::docker_db::Reply, String>),
     Live(crate::live::Kind, Result<crate::live::Report, String>),
+    Stalwart(Result<crate::live::Report, String>),
+    /// The SSH tunnel's local port once listening, `None` once closed.
+    Tunnel(Result<Option<u16>, String>),
     End(Result<(), String>),
 }
 
@@ -61,12 +65,18 @@ pub enum Command {
     DockerCheck,
     DockerList,
     DockerStats,
+    DockerResources,
     DockerRun(crate::docker::Action),
     /// Runs a download action (backup) and writes its stdout to `local`.
     DockerDownload { action: crate::docker::Action, local: PathBuf },
     DockerCancel,
     DockerDb(crate::docker_db::Request),
     Live(crate::live::Request),
+    Stalwart(crate::stalwart::Request),
+    /// Listens on a random `127.0.0.1` port here and forwards each
+    /// connection to `host:port` as seen from the server (`direct-tcpip`).
+    TunnelOpen { host: String, port: u16 },
+    TunnelClose,
 }
 
 #[derive(Clone)]
@@ -178,7 +188,18 @@ fn known_hosts_path() -> Result<PathBuf> {
     #[cfg(not(windows))]
     let root = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-    Ok(root.context("Direktori data pengguna tidak tersedia")?.join("awan-host-remote").join("known_hosts"))
+    let base = root.context("Direktori data pengguna tidak tersedia")?;
+    let new_path = base.join("awan-host-manager").join("known_hosts");
+    if !new_path.exists() {
+        let legacy_path = base.join("awan-host-remote").join("known_hosts");
+        if legacy_path.exists() {
+            if let Some(parent) = new_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(&legacy_path, &new_path);
+        }
+    }
+    Ok(new_path)
 }
 
 async fn run(
@@ -255,6 +276,11 @@ async fn run(
     let mut git_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut docker_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut live_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut stalwart_task: Option<tokio::task::JoinHandle<()>> = None;
+    // One local listener at a time; its connections end with it or with
+    // the session, since their channels belong to this connection.
+    let mut tunnel: Option<(tokio::net::TcpListener, String, u16)> = None;
+    let mut tunnel_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut docker_list_task: Option<tokio::task::JoinHandle<()>> = None;
     // A Docker page action (logs -f can run indefinitely), stoppable from the
     // page. It is not waited for when the shell ends: the session closes it.
@@ -262,8 +288,9 @@ async fn run(
     let mut docker_cancel: Option<oneshot::Sender<()>> = None;
     let mut docker_db_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut docker_stats_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut docker_resources_task: Option<tokio::task::JoinHandle<()>> = None;
     loop {
-        if shell_closed && update.is_none() && file_task.is_none() && fs_task.is_none() && git_task.is_none() && docker_task.is_none() && docker_list_task.is_none() && docker_db_task.is_none() && docker_stats_task.is_none() { break; }
+        if shell_closed && update.is_none() && file_task.is_none() && fs_task.is_none() && git_task.is_none() && docker_task.is_none() && docker_list_task.is_none() && docker_db_task.is_none() && docker_stats_task.is_none() && docker_resources_task.is_none() { break; }
         tokio::select! {
             _ = async {
                 match &mut file_task {
@@ -307,7 +334,63 @@ async fn run(
                     None => std::future::pending::<()>().await,
                 }
             } => { docker_stats_task = None; },
+            _ = async {
+                match &mut docker_resources_task {
+                    Some(task) => { let _ = task.await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => { docker_resources_task = None; },
+            accepted = async {
+                match &tunnel {
+                    Some((listener, ..)) => listener.accept().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let (Ok((stream, peer)), Some((_, host, port))) = (accepted, &tunnel) {
+                    tunnel_tasks.retain(|task| !task.is_finished());
+                    // A browser opens a handful of connections; more than
+                    // this means something other than the wizard is using it.
+                    if tunnel_tasks.len() < 16 {
+                        let open = session.channel_open_direct_tcpip(host.clone(), u32::from(*port), peer.ip().to_string(), u32::from(peer.port()));
+                        if let Ok(Ok(channel)) = timeout(Duration::from_secs(10), open).await {
+                            tunnel_tasks.push(tokio::spawn(forward_tunnel(stream, channel)));
+                        }
+                    }
+                }
+            },
             command = input.recv() => match command {
+                Some(Command::TunnelOpen { host, port }) => {
+                    for task in tunnel_tasks.drain(..) { task.abort(); }
+                    tunnel = None;
+                    let result = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.and_then(|listener| Ok((listener.local_addr()?.port(), listener))) {
+                        Ok((local, listener)) => { tunnel = Some((listener, host, port)); Ok(Some(local)) }
+                        Err(error) => Err(format!("Gagal membuka port lokal untuk tunnel: {error}")),
+                    };
+                    events.send(Event::Tunnel(result)).await?;
+                },
+                Some(Command::TunnelClose) => {
+                    for task in tunnel_tasks.drain(..) { task.abort(); }
+                    tunnel = None;
+                    events.send(Event::Tunnel(Ok(None))).await?;
+                },
+                Some(Command::Stalwart(request)) if stalwart_task.as_ref().is_none_or(|task| task.is_finished()) => {
+                    match timeout(Duration::from_secs(10), session.channel_open_session()).await {
+                        Ok(Ok(mut channel)) => {
+                            let stalwart_events = events.clone();
+                            stalwart_task = Some(tokio::spawn(async move {
+                                let result = match timeout(Duration::from_secs(90), crate::stalwart::check(&mut channel, request)).await {
+                                    Ok(result) => result.map_err(|error| format!("{error:#}")),
+                                    Err(_) => Err("Pemeriksaan Stalwart melewati batas 90 detik.".into()),
+                                };
+                                let _ = timeout(Duration::from_secs(2), channel.close()).await;
+                                let _ = stalwart_events.send(Event::Stalwart(result)).await;
+                            }));
+                        }
+                        Ok(Err(error)) => events.send(Event::Stalwart(Err(format!("Gagal membuka channel pemeriksaan: {error}")))).await?,
+                        Err(_) => events.send(Event::Stalwart(Err("Membuka channel pemeriksaan timeout.".into()))).await?,
+                    }
+                },
+                Some(Command::Stalwart(_)) => events.send(Event::Stalwart(Err("Pemeriksaan sebelumnya belum selesai.".into()))).await?,
                 Some(Command::DockerStats) if docker_stats_task.as_ref().is_none_or(|task| task.is_finished()) => {
                     match timeout(Duration::from_secs(10), session.channel_open_session()).await {
                         Ok(Ok(mut channel)) => {
@@ -364,6 +447,24 @@ async fn run(
                     }
                 },
                 Some(Command::DockerList) => events.send(Event::DockerList(Err("Daftar container masih dimuat.".into()))).await?,
+                Some(Command::DockerResources) if docker_resources_task.as_ref().is_none_or(|task| task.is_finished()) => {
+                    match timeout(Duration::from_secs(10), session.channel_open_session()).await {
+                        Ok(Ok(mut channel)) => {
+                            let resource_events = events.clone();
+                            docker_resources_task = Some(tokio::spawn(async move {
+                                let result = match timeout(Duration::from_secs(45), crate::docker::resources(&mut channel)).await {
+                                    Ok(result) => result.map_err(|error| format!("{error:#}")),
+                                    Err(_) => Err("Membaca image dan volume melewati batas 45 detik.".into()),
+                                };
+                                let _ = timeout(Duration::from_secs(2), channel.close()).await;
+                                let _ = resource_events.send(Event::DockerResources(result)).await;
+                            }));
+                        }
+                        Ok(Err(error)) => events.send(Event::DockerResources(Err(format!("Gagal membuka channel Docker: {error}")))).await?,
+                        Err(_) => events.send(Event::DockerResources(Err("Membuka channel Docker timeout.".into()))).await?,
+                    }
+                },
+                Some(Command::DockerResources) => events.send(Event::DockerResources(Err("Daftar image dan volume masih dimuat.".into()))).await?,
                 Some(Command::DockerRun(action)) if docker_run_task.as_ref().is_none_or(|task| task.is_finished()) => {
                     match action.command() {
                         Err(error) => events.send(Event::DockerEnd(Err(format!("{error:#}")))).await?,
@@ -574,6 +675,13 @@ async fn run(
     let _ = timeout(Duration::from_secs(2), session.disconnect(russh::Disconnect::ByApplication, "Sesi ditutup", "en")).await;
     if let Some(code) = exit_status.filter(|code| *code != 0) { bail!("Shell berakhir dengan exit code {code}"); }
     Ok(())
+}
+
+/// Copies bytes both ways between a local tunnel connection and its
+/// `direct-tcpip` channel until either side closes.
+async fn forward_tunnel(mut stream: tokio::net::TcpStream, channel: russh::Channel<client::Msg>) {
+    let mut remote = channel.into_stream();
+    let _ = tokio::io::copy_bidirectional(&mut stream, &mut remote).await;
 }
 
 struct SystemUpdate {

@@ -24,14 +24,84 @@ pub struct Container {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DbKind { MySql, Postgres }
 
+/// Who can reach a container port.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PortScope {
+    /// Published on all interfaces (or a specific non-loopback address).
+    Public,
+    /// Published on loopback only: reachable from the server itself.
+    Local,
+    /// Exposed but not published: only other containers can reach it.
+    Internal,
+}
+
+/// One entry of `docker ps`'s Ports column, with the IPv4/IPv6 duplicates
+/// Docker prints for each published port merged into one.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PortMapping {
+    pub scope: PortScope,
+    /// Bind address when it is neither a wildcard nor loopback.
+    pub address: Option<String>,
+    /// Host port (or range); `None` for an internal port.
+    pub host: Option<String>,
+    pub container: String,
+    pub protocol: String,
+}
+
+/// A common service name for a container port, to label it for humans.
+pub fn port_service(port: &str) -> Option<&'static str> {
+    Some(match port.parse::<u16>().ok()? {
+        21 => "FTP", 22 => "SSH", 25 => "SMTP", 53 => "DNS", 80 => "HTTP", 110 => "POP3",
+        143 => "IMAP", 443 => "HTTPS", 465 => "SMTPS", 587 => "Submission", 993 => "IMAPS",
+        995 => "POP3S", 1433 => "SQL Server", 3000 => "Web", 3306 => "MySQL", 4190 => "Sieve",
+        5432 => "PostgreSQL", 5672 => "AMQP", 6379 => "Redis", 8080 => "HTTP alt",
+        8443 => "HTTPS alt", 9000 => "Web", 9200 => "Elasticsearch", 11211 => "Memcached",
+        27017 => "MongoDB",
+        _ => return None,
+    })
+}
+
 impl Container {
     pub fn running(&self) -> bool { self.state == "running" }
+
+    /// Parses the Ports column, e.g. `0.0.0.0:25->25/tcp, [::]:25->25/tcp,
+    /// 127.0.0.1:5432->5432/tcp, 3000/tcp`. Unrecognized entries are kept
+    /// as internal ports with their raw text, so nothing silently vanishes.
+    pub fn port_mappings(&self) -> Vec<PortMapping> {
+        let mut mappings: Vec<PortMapping> = Vec::new();
+        for entry in self.ports.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+            let (published, target) = match entry.split_once("->") {
+                Some((published, target)) => (Some(published), target),
+                None => (None, entry),
+            };
+            let (container, protocol) = target.split_once('/').unwrap_or((target, "tcp"));
+            let (scope, address, host) = match published.and_then(|published| published.rsplit_once(':')) {
+                Some((bind, host)) => {
+                    let bind = bind.trim_start_matches('[').trim_end_matches(']');
+                    match bind {
+                        "" | "0.0.0.0" | "::" => (PortScope::Public, None, Some(host.to_owned())),
+                        "127.0.0.1" | "::1" | "localhost" => (PortScope::Local, None, Some(host.to_owned())),
+                        other => (PortScope::Public, Some(other.to_owned()), Some(host.to_owned())),
+                    }
+                }
+                None => (PortScope::Internal, None, None),
+            };
+            let mapping = PortMapping { scope, address, host, container: container.to_owned(), protocol: protocol.to_owned() };
+            if !mappings.contains(&mapping) { mappings.push(mapping); }
+        }
+        mappings
+    }
 
     pub fn db_kind(&self) -> Option<DbKind> {
         let image = self.image.to_ascii_lowercase();
         if image.contains("mariadb") || image.contains("mysql") { Some(DbKind::MySql) }
         else if image.contains("postgres") { Some(DbKind::Postgres) }
         else { None }
+    }
+
+    /// A Stalwart mail server, which gets the guided Stalwart Setup page.
+    pub fn is_stalwart(&self) -> bool {
+        self.image.to_ascii_lowercase().contains("stalwart")
     }
 
     /// A safe, zero-downtime config reload for well-known proxies.
@@ -55,6 +125,12 @@ pub struct Project {
     pub config_files: Vec<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TableFormat {
+    Sql,
+    Csv,
+}
+
 #[derive(Clone)]
 pub enum Action {
     Logs(String),
@@ -65,19 +141,53 @@ pub enum Action {
     /// Full dump streamed to a file on this computer (nothing is written on
     /// the server); see [`Action::is_download`].
     Backup { container: String, kind: DbKind },
+    /// Single table dump as SQL or CSV, streamed to a file on this computer.
+    BackupTable {
+        container: String,
+        kind: DbKind,
+        db: String,
+        schema: Option<String>,
+        table: String,
+        format: TableFormat,
+    },
     ComposeUp { project: Project, service: Option<String> },
     ComposeDown(Project),
     /// `docker network create <name>`, e.g. a shared `edge` network that a
     /// reverse proxy and several Compose projects join as `external: true`.
     NetworkCreate(String),
+    /// `docker pull <reference>`: a new image, or a newer build of a tag.
+    ImagePull(String),
+    /// `docker image rm <repo:tag | id>`. Removing one of several tags only
+    /// untags it; an image a container uses is refused by Docker.
+    ImageRemove(String),
+    /// Untagged images only, or (`all`) every image no container uses.
+    ImagePrune { all: bool },
+    /// `docker rm <container>`. Permanently deletes a stopped container.
+    ContainerRemove(String),
+    VolumeCreate(String),
+    VolumeRemove(String),
+    /// Volumes no container uses (Docker 23+: anonymous volumes only).
+    VolumePrune,
 }
 
 fn quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\"'\"'")) }
 
 /// Docker container / Compose project and service names.
-fn valid_name(value: &str) -> bool {
+pub(crate) fn valid_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && value.as_bytes()[0].is_ascii_alphanumeric()
         && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+}
+
+/// An image reference (`nginx`, `ghcr.io/org/app:1.2`, `app@sha256:…`) or
+/// image ID (`sha256:…`).
+pub(crate) fn valid_image(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 255 && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.-/:@".contains(&c))
+}
+
+pub(crate) fn valid_table_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.-$".contains(&c))
 }
 
 fn valid_path(value: &str) -> bool {
@@ -93,21 +203,34 @@ impl Action {
             Self::Start(name) => format!("docker start {name}"),
             Self::Exec { container, command } => format!("docker exec {container}: {command}"),
             Self::Backup { container, .. } => format!("backup {container}"),
+            Self::BackupTable { db, table, format, .. } => format!(
+                "backup {db}.{table} ({})",
+                match format { TableFormat::Sql => "sql", TableFormat::Csv => "csv" }
+            ),
             Self::ComposeUp { project, service: Some(service) } => format!("{}: up -d --build {service}", project.name),
             Self::ComposeUp { project, service: None } => format!("{}: up -d --build", project.name),
             Self::ComposeDown(project) => format!("{}: down", project.name),
             Self::NetworkCreate(name) => format!("docker network create {name}"),
+            Self::ImagePull(image) => format!("docker pull {image}"),
+            Self::ImageRemove(image) => format!("docker image rm {image}"),
+            Self::ImagePrune { all: false } => "docker image prune -f".into(),
+            Self::ImagePrune { all: true } => "docker image prune -a -f".into(),
+            Self::ContainerRemove(name) => format!("docker rm {name}"),
+            Self::VolumeCreate(name) => format!("docker volume create {name}"),
+            Self::VolumeRemove(name) => format!("docker volume rm {name}"),
+            Self::VolumePrune => "docker volume prune -f".into(),
         }
     }
 
     /// The command's stdout is the result itself (a dump), saved to a local
     /// file; stderr alone goes to the output panel.
-    pub fn is_download(&self) -> bool { matches!(self, Self::Backup { .. }) }
+    pub fn is_download(&self) -> bool { matches!(self, Self::Backup { .. } | Self::BackupTable { .. }) }
 
     /// Whether this action can interrupt a running service, so the page
     /// asks before running it.
     pub fn disruptive(&self) -> bool {
-        matches!(self, Self::Restart(_) | Self::Stop(_) | Self::ComposeUp { .. } | Self::ComposeDown(_))
+        matches!(self, Self::Restart(_) | Self::Stop(_) | Self::ComposeUp { .. } | Self::ComposeDown(_)
+            | Self::ImageRemove(_) | Self::ImagePrune { .. } | Self::ContainerRemove(_) | Self::VolumeRemove(_) | Self::VolumePrune)
     }
 
     /// The shell command, built only from validated values; run on its own
@@ -137,6 +260,45 @@ impl Action {
                 };
                 return Ok(docker_shell(&format!("docker exec {} sh -c {}", quote(container), quote(dump))));
             }
+            Self::BackupTable { container, kind, db, schema, table, format } => {
+                if !valid_name(container) { bail!("Nama container tidak valid"); }
+                if !valid_table_name(db) || !valid_table_name(table) { bail!("Nama database atau tabel tidak valid"); }
+                let dump = match (kind, format) {
+                    (DbKind::MySql, TableFormat::Sql) => {
+                        format!(
+                            r#"pw="${{MARIADB_ROOT_PASSWORD:-${{MYSQL_ROOT_PASSWORD:-}}}}"; f="${{MARIADB_ROOT_PASSWORD_FILE:-${{MYSQL_ROOT_PASSWORD_FILE:-}}}}"; if [ -z "$pw" ] && [ -n "$f" ]; then pw=$(cat "$f"); fi; if command -v mariadb-dump >/dev/null 2>&1; then d=mariadb-dump; else d=mysqldump; fi; MYSQL_PWD="$pw" exec "$d" -uroot --single-transaction --quick {} {}"#,
+                            quote(db), quote(table)
+                        )
+                    }
+                    (DbKind::MySql, TableFormat::Csv) => {
+                        format!(
+                            r#"u=root; pw="${{MARIADB_ROOT_PASSWORD:-${{MYSQL_ROOT_PASSWORD:-}}}}"; f="${{MARIADB_ROOT_PASSWORD_FILE:-${{MYSQL_ROOT_PASSWORD_FILE:-}}}}"; if [ -z "$pw" ] && [ -n "$f" ]; then pw=$(cat "$f"); fi; if [ -z "$pw" ] && [ -n "${{MARIADB_USER:-${{MYSQL_USER:-}}}}" ]; then u="${{MARIADB_USER:-$MYSQL_USER}}"; pw="${{MARIADB_PASSWORD:-${{MYSQL_PASSWORD:-}}}}"; fi; if command -v mariadb >/dev/null 2>&1; then c=mariadb; else c=mysql; fi; MYSQL_PWD="$pw" "$c" -u"$u" --batch --raw -e "SELECT * FROM \`{}\`.\`{}\`" | if command -v python3 >/dev/null 2>&1; then python3 -c 'import sys, csv; [csv.writer(sys.stdout).writerow(r) for r in csv.reader(sys.stdin, delimiter="\t")]'; else cat; fi"#,
+                            db.replace('`', "``"), table.replace('`', "``")
+                        )
+                    }
+                    (DbKind::Postgres, TableFormat::Sql) => {
+                        let target = match schema {
+                            Some(s) if s != "public" => format!("{s}.{table}"),
+                            _ => table.clone(),
+                        };
+                        format!(
+                            r#"exec pg_dump -U "${{POSTGRES_USER:-postgres}}" -d {} -t {}"#,
+                            quote(db), quote(&target)
+                        )
+                    }
+                    (DbKind::Postgres, TableFormat::Csv) => {
+                        let target = match schema {
+                            Some(s) if s != "public" => format!("\\\"{}\\\".\\\"{}\\\"", s.replace('"', "\"\""), table.replace('"', "\"\"")),
+                            _ => format!("\\\"{}\\\"", table.replace('"', "\"\"")),
+                        };
+                        format!(
+                            r#"exec psql -X -q -v ON_ERROR_STOP=1 -U "${{POSTGRES_USER:-postgres}}" -d {} -c "\copy (SELECT * FROM {target}) TO STDOUT WITH CSV HEADER""#,
+                            quote(db)
+                        )
+                    }
+                };
+                return Ok(docker_shell(&format!("docker exec {} sh -c {}", quote(container), quote(&dump))));
+            }
             Self::ComposeUp { project, service } => {
                 let base = compose_base(project)?;
                 match service {
@@ -155,6 +317,22 @@ impl Action {
                     name = quote(name),
                 )
             }
+            Self::ImagePull(image) | Self::ImageRemove(image) => {
+                if !valid_image(image) { bail!("Nama image tidak valid"); }
+                let verb = if matches!(self, Self::ImagePull(_)) { "pull" } else { "image rm" };
+                format!("docker {verb} {}", quote(image))
+            }
+            Self::ImagePrune { all } => format!("docker image prune -f{}", if *all { " -a" } else { "" }),
+            Self::ContainerRemove(name) => {
+                if !valid_name(name) { bail!("Nama container tidak valid"); }
+                format!("docker rm {}", quote(name))
+            }
+            Self::VolumeCreate(name) | Self::VolumeRemove(name) => {
+                if !valid_name(name) { bail!("Nama volume hanya boleh huruf, angka, titik, garis bawah, dan tanda hubung."); }
+                let verb = if matches!(self, Self::VolumeCreate(_)) { "create" } else { "rm" };
+                format!("docker volume {verb} {}", quote(name))
+            }
+            Self::VolumePrune => "docker volume prune -f".into(),
         };
         Ok(docker_shell(&format!("exec 2>&1; {script}")))
     }
@@ -312,6 +490,127 @@ pub async fn list(channel: &mut Channel<client::Msg>) -> Result<Vec<Container>> 
     Ok(containers)
 }
 
+#[derive(Clone)]
+pub struct Image {
+    /// Full ID, `sha256:…`.
+    pub id: String,
+    /// `<none>` for an untagged (dangling) image.
+    pub repository: String,
+    pub tag: String,
+    /// e.g. "3 weeks ago".
+    pub created: String,
+    pub size: String,
+    /// Containers (running or not) created from this image.
+    pub used_by: Vec<String>,
+}
+
+impl Image {
+    pub fn dangling(&self) -> bool { self.repository == "<none>" || self.tag == "<none>" }
+
+    /// What actions name the image by: `repo:tag`, or the ID when untagged.
+    pub fn reference(&self) -> String {
+        if self.dangling() { self.id.clone() } else { format!("{}:{}", self.repository, self.tag) }
+    }
+
+    /// The first 12 hex digits, as Docker shows IDs.
+    pub fn short_id(&self) -> &str {
+        let hex = self.id.strip_prefix("sha256:").unwrap_or(&self.id);
+        &hex[..hex.len().min(12)]
+    }
+}
+
+#[derive(Clone)]
+pub struct Volume {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    /// Compose project that created it, if any.
+    pub project: String,
+    pub used_by: Vec<String>,
+}
+
+impl Volume {
+    /// Docker names unnamed (anonymous) volumes with 64 hex digits.
+    pub fn anonymous(&self) -> bool { self.name.len() == 64 && self.name.bytes().all(|c| c.is_ascii_hexdigit()) }
+}
+
+/// One row of `docker system df`.
+#[derive(Clone)]
+pub struct DiskUsage {
+    pub total: String,
+    pub active: String,
+    pub size: String,
+    /// e.g. "1.2GB (45%)".
+    pub reclaimable: String,
+}
+
+#[derive(Clone, Default)]
+pub struct Resources {
+    pub images: Vec<Image>,
+    pub volumes: Vec<Volume>,
+    pub image_disk: Option<DiskUsage>,
+    pub volume_disk: Option<DiskUsage>,
+}
+
+/// Images, volumes, which containers use them, and disk usage. `system df`
+/// can be slow on a busy host, so it is bounded and allowed to fail.
+const RESOURCES: &str = r#"if ! command -v docker >/dev/null 2>&1; then
+    printf '[Awan] Docker belum terpasang di server. Pasang Docker Engine dari halaman Applications.\n' >&2
+    exit 2
+fi
+printf 'S\tIMAGES\n'
+docker image ls --no-trunc --format '{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' || exit 1
+printf 'S\tVOLUMES\n'
+docker volume ls --format '{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}\t{{.Label "com.docker.compose.project"}}' || exit 1
+printf 'S\tUSE\n'
+docker ps -aq --no-trunc | head -n 500 | xargs -r docker inspect --format '{{.Name}}{{"\t"}}{{.Image}}{{"\t"}}{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}},{{end}}{{end}}' 2>/dev/null
+printf 'S\tDF\n'
+if command -v timeout >/dev/null 2>&1; then t='timeout 20'; else t=''; fi
+$t docker system df --format '{{.Type}}\t{{.TotalCount}}\t{{.Active}}\t{{.Size}}\t{{.Reclaimable}}' 2>/dev/null
+exit 0
+"#;
+
+pub async fn resources(channel: &mut Channel<client::Msg>) -> Result<Resources> {
+    let text = collect(channel, RESOURCES, "Daftar image dan volume tidak dapat dibaca.").await?;
+    let mut resources = Resources::default();
+    let mut users: Vec<(String, String, Vec<String>)> = Vec::new();
+    let mut section = "";
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        match (section, fields.as_slice()) {
+            (_, ["S", name]) => section = match *name { "IMAGES" => "images", "VOLUMES" => "volumes", "USE" => "use", "DF" => "df", _ => "" },
+            ("images", [id, repository, tag, created, size]) if resources.images.len() < 500 => resources.images.push(Image {
+                id: (*id).into(), repository: (*repository).into(), tag: (*tag).into(), created: (*created).into(),
+                size: (*size).into(), used_by: Vec::new(),
+            }),
+            ("volumes", [name, driver, mountpoint, project]) if valid_name(name) && resources.volumes.len() < 500 => resources.volumes.push(Volume {
+                name: (*name).into(), driver: (*driver).into(), mountpoint: (*mountpoint).into(), project: (*project).into(), used_by: Vec::new(),
+            }),
+            ("use", [name, image, volumes]) => users.push((
+                name.trim_start_matches('/').to_owned(),
+                (*image).to_owned(),
+                volumes.split(',').filter(|volume| !volume.is_empty()).map(str::to_owned).collect(),
+            )),
+            ("df", [kind, total, active, size, reclaimable]) => {
+                let usage = DiskUsage { total: (*total).into(), active: (*active).into(), size: (*size).into(), reclaimable: (*reclaimable).into() };
+                match *kind {
+                    "Images" => resources.image_disk = Some(usage),
+                    "Local Volumes" => resources.volume_disk = Some(usage),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    for (container, image, volumes) in users {
+        if let Some(found) = resources.images.iter_mut().find(|found| found.id == image) { found.used_by.push(container.clone()); }
+        for volume in volumes {
+            if let Some(found) = resources.volumes.iter_mut().find(|found| found.name == volume) { found.used_by.push(container.clone()); }
+        }
+    }
+    Ok(resources)
+}
+
 /// Output kept for the page; older text is dropped from the front.
 const MAX_OUTPUT: usize = 128 * 1024;
 
@@ -340,6 +639,10 @@ pub struct State {
     pub stats_loading: bool,
     pub stats_error: Option<String>,
     pub stats_at: Option<std::time::Instant>,
+    /// Images and volumes, read when their tab is first opened.
+    pub resources: Option<Resources>,
+    pub resources_error: Option<String>,
+    pub resources_loading: bool,
     /// Bytes of a UTF-8 character split across two chunks.
     partial: Vec<u8>,
 }
@@ -382,6 +685,7 @@ impl State {
     pub fn permission_denied(&self) -> bool {
         let denied = |text: &str| { let text = text.to_ascii_lowercase(); text.contains("permission denied") && text.contains("docker") };
         self.list_error.as_deref().is_some_and(denied)
+            || self.resources_error.as_deref().is_some_and(denied)
             || (self.result.as_ref().is_some_and(Result::is_err) && denied(&self.output))
     }
 }
@@ -412,6 +716,21 @@ pub fn backup_file_name(container: &str) -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("backup_{container}_{year:04}-{month:02}-{day:02}_{:02}{:02}{:02}.sql", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+pub fn table_backup_file_name(db: &str, table: &str, ext: &str) -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{db}_{table}_{year:04}-{month:02}-{day:02}_{:02}{:02}.{ext}", rem / 3600, rem % 3600 / 60)
 }
 
 /// Output is shown as plain text, so terminal escape sequences (colors,

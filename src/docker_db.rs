@@ -41,14 +41,21 @@ impl Table {
         }
     }
 
-    fn same(&self, other: &Table) -> bool { self.schema == other.schema && self.name == other.name }
+    pub fn same(&self, other: &Table) -> bool { self.schema == other.schema && self.name == other.name }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub column: String,
+    pub desc: bool,
 }
 
 #[derive(Clone)]
 pub enum Query {
     Databases,
     Tables(String),
-    Rows { db: String, table: Table, offset: usize },
+    Rows { db: String, table: Table, offset: usize, sort: Option<Sort> },
+    LastPage { db: String, table: Table, sort: Option<Sort> },
     /// SQL typed in the SQL tab. `write: false` runs it in a read-only
     /// session; `write: true` (DDL/DML) only after the user confirmed.
     Sql { db: Option<String>, sql: String, write: bool },
@@ -128,6 +135,7 @@ pub struct Rows {
     pub db: String,
     pub table: Table,
     pub offset: usize,
+    pub sort: Option<Sort>,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     /// Another page follows (one extra row was returned).
@@ -138,6 +146,7 @@ pub enum Reply {
     Databases(Vec<String>),
     Tables { db: String, tables: Vec<Table> },
     Rows(Rows),
+    LastPage { db: String, table: Table, offset: usize, sort: Option<Sort>, count: usize },
     Sql { db: Option<String>, write: bool, result: SqlResult },
 }
 
@@ -148,6 +157,15 @@ fn ident(kind: DbKind, name: &str) -> String {
         DbKind::MySql => format!("`{}`", name.replace('`', "``")),
         DbKind::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
     }
+}
+
+pub fn truncate_sql(kind: DbKind, db: &str, table: &Table) -> String {
+    let from = match (kind, &table.schema) {
+        (DbKind::MySql, _) => format!("{}.{}", ident(kind, db), ident(kind, &table.name)),
+        (DbKind::Postgres, Some(schema)) => format!("{}.{}", ident(kind, schema), ident(kind, &table.name)),
+        (DbKind::Postgres, None) => ident(kind, &table.name),
+    };
+    format!("TRUNCATE TABLE {from};")
 }
 
 fn literal(kind: DbKind, value: &str) -> String {
@@ -180,7 +198,7 @@ impl Request {
             (DbKind::MySql, _) => (MYSQL_CLIENT, None),
             // PostgreSQL connects to one database at a time.
             (DbKind::Postgres, Query::Databases) => (POSTGRES_CLIENT, None),
-            (DbKind::Postgres, Query::Tables(db) | Query::Rows { db, .. }) => (POSTGRES_CLIENT, Some(db.as_str())),
+            (DbKind::Postgres, Query::Tables(db) | Query::Rows { db, .. } | Query::LastPage { db, .. }) => (POSTGRES_CLIENT, Some(db.as_str())),
             (DbKind::Postgres, Query::Sql { db, write, .. }) => (if *write { POSTGRES_WRITE_CLIENT } else { POSTGRES_CLIENT }, db.as_deref()),
         };
         let env = db.map(|db| format!("-e AWAN_DB={} ", quote(db))).unwrap_or_default();
@@ -208,14 +226,29 @@ impl Request {
                  WHERE c.relkind IN ('r','p','v','m','f') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' \
                  ORDER BY 1, 2;".to_owned()
             }
-            (Query::Rows { db, table, offset }, _) => {
+            (Query::Rows { db, table, offset, sort }, _) => {
                 if !valid_name(db) || !valid_name(&table.name) || table.schema.as_deref().is_some_and(|s| !valid_name(s)) { bail!("Nama tabel tidak valid"); }
                 let from = match (kind, &table.schema) {
                     (DbKind::MySql, _) => format!("{}.{}", ident(kind, db), ident(kind, &table.name)),
                     (DbKind::Postgres, Some(schema)) => format!("{}.{}", ident(kind, schema), ident(kind, &table.name)),
                     (DbKind::Postgres, None) => ident(kind, &table.name),
                 };
-                format!("SELECT * FROM {from} LIMIT {} OFFSET {offset};", PAGE + 1)
+                let order = match sort {
+                    Some(Sort { column, desc }) if valid_name(column) => {
+                        format!(" ORDER BY {} {}", ident(kind, column), if *desc { "DESC" } else { "ASC" })
+                    }
+                    _ => String::new(),
+                };
+                format!("SELECT * FROM {from}{order} LIMIT {} OFFSET {offset};", PAGE + 1)
+            }
+            (Query::LastPage { db, table, .. }, _) => {
+                if !valid_name(db) || !valid_name(&table.name) || table.schema.as_deref().is_some_and(|s| !valid_name(s)) { bail!("Nama tabel tidak valid"); }
+                let from = match (kind, &table.schema) {
+                    (DbKind::MySql, _) => format!("{}.{}", ident(kind, db), ident(kind, &table.name)),
+                    (DbKind::Postgres, Some(schema)) => format!("{}.{}", ident(kind, schema), ident(kind, &table.name)),
+                    (DbKind::Postgres, None) => ident(kind, &table.name),
+                };
+                format!("SELECT COUNT(*) FROM {from};")
             }
             (Query::Sql { sql, write, .. }, _) => {
                 if sql.trim().is_empty() { bail!("Query kosong."); }
@@ -307,11 +340,19 @@ pub async fn execute(channel: &mut Channel<client::Msg>, request: Request) -> Re
             }).collect();
             Reply::Tables { db, tables }
         }
-        Query::Rows { db, table, offset } => {
+        Query::Rows { db, table, offset, sort } => {
             let mut rows = grid.rows;
             let more = rows.len() > PAGE;
             rows.truncate(PAGE);
-            Reply::Rows(Rows { db, table, offset, columns: grid.columns, rows, more })
+            Reply::Rows(Rows { db, table, offset, sort, columns: grid.columns, rows, more })
+        }
+        Query::LastPage { db, table, sort } => {
+            let count: usize = grid.rows.first()
+                .and_then(|r| r.first().cloned().flatten())
+                .and_then(|c| c.trim().parse().ok())
+                .unwrap_or(0);
+            let offset = count.saturating_sub(1) / PAGE * PAGE;
+            Reply::LastPage { db, table, offset, sort, count }
         }
         Query::Sql { .. } => unreachable!("handled above"),
     })
@@ -421,6 +462,7 @@ pub struct State {
     pub expanded: HashSet<String>,
     pub selected: Option<(String, Table)>,
     pub offset: usize,
+    pub sort: Option<Sort>,
     pub rows: Option<Rows>,
     pub loading: bool,
     /// Queries waiting for the channel, in order. Only the newest page
@@ -457,7 +499,7 @@ impl State {
     /// Whether the loaded rows are the selected table's current page.
     pub fn rows_current(&self) -> bool {
         match (&self.rows, &self.selected) {
-            (Some(rows), Some((db, table))) => rows.db == *db && rows.table.same(table) && rows.offset == self.offset,
+            (Some(rows), Some((db, table))) => rows.db == *db && rows.table.same(table) && rows.offset == self.offset && rows.sort == self.sort,
             _ => false,
         }
     }
@@ -481,18 +523,29 @@ impl State {
                         follow_up.push(Query::Tables(db));
                     }
                     if let Some((db, table)) = self.selected.clone() {
-                        follow_up.push(Query::Rows { db, table, offset: self.offset });
+                        follow_up.push(Query::Rows { db, table, offset: self.offset, sort: self.sort.clone() });
                     }
                 }
             }
             Err(error) if was_sql => { self.sql_error = Some(error); self.sql_result = None; self.sql_revision += 1; }
             Ok(Reply::Databases(databases)) => { self.databases = Some(databases); self.error = None; }
             Ok(Reply::Tables { db, tables }) => { self.tables.insert(db, tables); self.error = None; }
+            Ok(Reply::LastPage { db, table, offset, sort, count }) => {
+                if let Some(list) = self.tables.get_mut(&db) {
+                    if let Some(t) = list.iter_mut().find(|t| t.same(&table)) {
+                        t.estimate = Some(count as u64);
+                    }
+                }
+                self.offset = offset;
+                self.sort = sort.clone();
+                follow_up.push(Query::Rows { db, table, offset, sort });
+            }
             Ok(Reply::Rows(rows)) => {
                 // A page for a table the user has since left is dropped.
                 let wanted = self.selected.as_ref().is_some_and(|(db, table)| rows.db == *db && rows.table.same(table));
                 if wanted {
                     self.offset = rows.offset;
+                    self.sort = rows.sort.clone();
                     self.rows = Some(rows);
                     self.revision += 1;
                     self.error = None;

@@ -1,6 +1,8 @@
 # Executed only on the connected Linux host. No installation or persistent agent.
+import calendar
 import os
 import platform
+import re
 import selectors
 import shutil
 import signal
@@ -66,6 +68,23 @@ def unescape_mount(value):
 
 def summary():
     add('hostname', platform.node())
+    add('utc_offset', time.localtime().tm_gmtoff)
+    try:
+        # Global-scope addresses of the server's own interfaces. Container
+        # bridges are skipped: their 172.x addresses are not how anyone
+        # reaches the server. A cloud VM's public IP is often NAT'ed and
+        # absent here; the app shows the address it connected to for that.
+        addresses = []
+        for line in run(['ip', '-o', 'addr', 'show', 'scope', 'global']).splitlines():
+            fields = line.split()
+            if len(fields) < 4 or fields[1].startswith(('docker', 'br-', 'veth', 'virbr', 'cni', 'flannel', 'cali')):
+                continue
+            address = fields[3].split('/')[0]
+            if address not in addresses:
+                addresses.append(address)
+        add('addresses', ' '.join(addresses[:16]))
+    except (OSError, ValueError) as error:
+        add('addresses_error', str(error))
     add('kernel', platform.release() + ' / ' + platform.machine())
     add('cores', os.cpu_count() or 'Tidak tersedia')
     try:
@@ -171,6 +190,128 @@ def summary():
     except (OSError, ValueError) as error:
         add('uptime_error', str(error))
 
+HISTORY_RANGES = (86400, 7 * 86400)
+HISTORY_BUCKETS = 288
+SA_DIRS = ('/var/log/sysstat', '/var/log/sa')
+SA_NAME = re.compile(r'^sa(\d{2}|\d{8})$')
+
+def sa_files(directory, since):
+    # Daily files are `saDD`, or `saYYYYMMDD` with `-D`; with HISTORY above
+    # 28 they move into `YYYYMM` subfolders and `saDD` becomes a symlink.
+    found = {}
+    for root, folders, names in os.walk(directory):
+        if root != directory:
+            folders[:] = []
+        for name in names:
+            if not SA_NAME.match(name):
+                continue
+            path = os.path.realpath(os.path.join(root, name))
+            try:
+                modified = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if modified >= since:
+                found[path] = modified
+    return sorted(found.items(), key=lambda item: item[1])[-40:]
+
+def sar_timestamp(value):
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    value = value[:-4] if value.endswith(' UTC') else value
+    return calendar.timegm(time.strptime(value, '%Y-%m-%d %H:%M:%S'))
+
+def sysstat_enabled():
+    try:
+        with open('/etc/default/sysstat') as source:
+            if any(re.match(r'^\s*ENABLED=["\']?false', line) for line in source):
+                return False
+    except OSError:
+        pass
+    for unit in ('sysstat-collect.timer', 'sysstat'):
+        try:
+            if subprocess.run(['systemctl', 'is-active', '--quiet', unit], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return False
+
+def history(seconds):
+    if seconds not in HISTORY_RANGES:
+        raise ValueError('Rentang riwayat tidak dikenal.')
+    add('range', seconds)
+    now = int(time.time())
+    add('now', now)
+    add('utc_offset', time.localtime().tm_gmtoff)
+    for path in ('/etc/sysstat/sysstat', '/etc/sysconfig/sysstat'):
+        try:
+            with open(path) as source:
+                for line in source:
+                    match = re.match(r'^\s*HISTORY=["\']?(\d+)', line)
+                    if match:
+                        add('retention', int(match.group(1)))
+        except OSError:
+            pass
+    if not shutil.which('sadf'):
+        add('sysstat', 'missing')
+        return
+    directory = next((path for path in SA_DIRS if os.path.isdir(path)), None)
+    files = sa_files(directory, now - seconds - 86400) if directory else []
+    newest = max((modified for _, modified in files), default=0)
+    # sysstat writes every 10 minutes; nothing newer than 30 minutes means
+    # collection is switched off (Debian's ENABLED="false"), not running, or
+    # was only just switched on and has not written its first sample yet.
+    if now - newest <= 1800:
+        add('sysstat', 'ok')
+    else:
+        add('sysstat', 'waiting' if sysstat_enabled() else 'inactive')
+    samples = {}
+    for path, _ in files:
+        try:
+            output = run(['sadf', '-d', path, '--', '-u', '-r'])
+        except (OSError, ValueError) as error:
+            add('history_error', os.path.basename(path) + ': ' + str(error))
+            continue
+        header = None
+        for line in output.splitlines():
+            if line.startswith('#'):
+                header = line.lstrip('# ').split(';')
+                continue
+            fields = line.split(';')
+            if not header or len(fields) != len(header) or 'timestamp' not in header:
+                continue
+            try:
+                stamp = sar_timestamp(fields[header.index('timestamp')])
+                if stamp < now - seconds or stamp > now + 600:
+                    continue
+                sample = samples.setdefault(stamp, [None, None])
+                if '%idle' in header:
+                    sample[0] = max(0.0, min(100.0, 100.0 - float(fields[header.index('%idle')])))
+                if '%memused' in header:
+                    used = float(fields[header.index('%memused')])
+                    # Same measure as the live card (MemTotal - MemAvailable)
+                    # when sysstat reports kbavail; plain %memused otherwise.
+                    if 'kbavail' in header and 'kbmemused' in header and used > 0:
+                        total = float(fields[header.index('kbmemused')]) * 100.0 / used
+                        used = 100.0 * (total - float(fields[header.index('kbavail')])) / total
+                    sample[1] = max(0.0, min(100.0, used))
+            except (ValueError, ZeroDivisionError):
+                continue
+    width = seconds / HISTORY_BUCKETS
+    buckets = {}
+    for stamp, (cpu, memory) in samples.items():
+        if cpu is None or memory is None:
+            continue
+        bucket = buckets.setdefault(int((now - stamp) // width), [0, 0.0, 0.0, 0])
+        bucket[0] += 1
+        bucket[1] += cpu
+        bucket[2] += memory
+        bucket[3] = max(bucket[3], now - stamp)
+    for index in sorted(buckets, reverse=True):
+        count, cpu, memory, ago = buckets[index]
+        rows.append(['point', str(max(0, int(ago))), str(round(cpu / count, 1)), str(round(memory / count, 1))])
+
 def ports():
     try:
         output = run(['ss', '-H', '-lntu', '-p'])
@@ -202,6 +343,7 @@ try:
     os.environ['LC_ALL'] = 'C'
     if kind == 'summary': summary()
     elif kind == 'ports': ports()
+    elif kind == 'history': history(int(fields[0]) if fields else 0)
     else: raise ValueError('Jenis pembacaan tidak dikenal.')
     if len(rows) > 5000 or any(len(row) > 256 for row in rows):
         raise ValueError('Hasil melebihi batas tabel.')

@@ -1,4 +1,4 @@
-# Arahan proyek Awan Host Remote
+# Arahan proyek Awan Host Manager
 
 ## Tujuan aplikasi
 

@@ -11,6 +11,9 @@
 //! examples) are left as plain literals at their call site rather than
 //! duplicated here with no real translation.
 
+pub const FLAG_ID_SVG: &str = include_str!("../assets/flags/id.svg");
+pub const FLAG_EN_SVG: &str = include_str!("../assets/flags/en.svg");
+
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Language {
     #[default]
@@ -28,10 +31,17 @@ impl Language {
         }
     }
 
-    fn code(self) -> &'static str {
+    pub fn code(self) -> &'static str {
         match self {
             Self::English => "en",
             Self::Indonesian => "id",
+        }
+    }
+
+    pub fn flag_asset_path(self) -> &'static str {
+        match self {
+            Self::English => "flags/en.svg",
+            Self::Indonesian => "flags/id.svg",
         }
     }
 
@@ -46,9 +56,21 @@ impl Language {
     /// Reads the saved preference (see [`Self::persist`]); `None` if there is
     /// none yet, so the caller falls back to [`Self::detect_system`].
     pub fn load_saved() -> Option<Self> {
-        let path = settings_path()?;
-        let content = std::fs::read_to_string(path).ok()?;
-        Self::from_code(content.trim())
+        if let Some(path) = settings_path() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Some(lang) = Self::from_code(content.trim()) {
+                    return Some(lang);
+                }
+            }
+        }
+        if let Some(legacy) = legacy_settings_path() {
+            if let Ok(content) = std::fs::read_to_string(legacy) {
+                if let Some(lang) = Self::from_code(content.trim()) {
+                    return Some(lang);
+                }
+            }
+        }
+        None
     }
 
     /// Persists a manual choice from the Settings page so it survives a
@@ -56,7 +78,9 @@ impl Language {
     /// permissions) is silently ignored — the app keeps working for the
     /// session, it just re-detects next launch instead of remembering.
     pub fn persist(self) {
-        let Some(path) = settings_path() else { return; };
+        let Some(path) = settings_path() else {
+            return;
+        };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -71,13 +95,19 @@ impl Language {
         for var in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
             if let Ok(value) = std::env::var(var) {
                 let value = value.to_ascii_lowercase();
-                if value.starts_with("id") { return Self::Indonesian; }
-                if value.starts_with("en") { return Self::English; }
+                if value.starts_with("id") {
+                    return Self::Indonesian;
+                }
+                if value.starts_with("en") {
+                    return Self::English;
+                }
             }
         }
         #[cfg(windows)]
         {
-            if windows_locale::is_indonesian() { return Self::Indonesian; }
+            if windows_locale::is_indonesian() {
+                return Self::Indonesian;
+            }
         }
         Self::English
     }
@@ -86,11 +116,40 @@ impl Language {
 fn settings_path() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var_os("APPDATA").map(|dir| std::path::PathBuf::from(dir).join("AwanHostRemote").join("language"))
+        std::env::var_os("APPDATA").map(|dir| {
+            std::path::PathBuf::from(dir)
+                .join("AwanHostManager")
+                .join("language")
+        })
     }
     #[cfg(not(windows))]
     {
-        std::env::var_os("HOME").map(|dir| std::path::PathBuf::from(dir).join(".config").join("awan-host-remote").join("language"))
+        std::env::var_os("HOME").map(|dir| {
+            std::path::PathBuf::from(dir)
+                .join(".config")
+                .join("awan-host-manager")
+                .join("language")
+        })
+    }
+}
+
+fn legacy_settings_path() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("APPDATA").map(|dir| {
+            std::path::PathBuf::from(dir)
+                .join("AwanHostRemote")
+                .join("language")
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(|dir| {
+            std::path::PathBuf::from(dir)
+                .join(".config")
+                .join("awan-host-remote")
+                .join("language")
+        })
     }
 }
 
@@ -130,6 +189,26 @@ pub struct Strings {
     pub settings_language_desc: &'static str,
     pub settings_about_heading: &'static str,
     pub settings_about_text: &'static str,
+    pub settings_theme_light_desc: &'static str,
+    pub settings_theme_dark_desc: &'static str,
+    pub settings_info_heading: &'static str,
+    pub settings_info_desc: &'static str,
+    pub settings_about_open: &'static str,
+    pub settings_awan_apps_desc: &'static str,
+    pub settings_contribute_desc: &'static str,
+    pub about_back: &'static str,
+    pub about_features_heading: &'static str,
+    pub about_feature_summary: &'static str,
+    pub about_feature_terminal: &'static str,
+    pub about_feature_editor: &'static str,
+    pub about_feature_docker: &'static str,
+    pub about_feature_firewall: &'static str,
+    pub about_feature_apps: &'static str,
+    pub about_security_heading: &'static str,
+    pub about_security_keyring: &'static str,
+    pub about_security_hostkey: &'static str,
+    pub about_security_confirm: &'static str,
+    pub about_built_with: &'static str,
 
     // Hosts page
     pub hosts_page_subtitle: &'static str,
@@ -142,6 +221,16 @@ pub struct Strings {
     pub hosts_delete_dialog_desc: &'static str,
     pub hosts_delete_dialog_ok: &'static str,
     pub hosts_deleted_unsaved: &'static str,
+    pub hosts_edit: &'static str,
+
+    // Edit host dialog
+    pub edit_host_title: &'static str,
+    pub edit_host_submit: &'static str,
+    pub edit_host_auth_change_note: &'static str,
+    pub edit_host_disconnect_first: &'static str,
+    pub host_connection_lost_title: &'static str,
+    pub edit_host_done: &'static str,
+    pub edit_host_login_removed: &'static str,
 
     // Add host dialog
     pub add_host_field_name: &'static str,
@@ -198,6 +287,10 @@ pub struct Strings {
     pub summary_uptime: &'static str,
     pub summary_ssh: &'static str,
     pub summary_ssh_connected: &'static str,
+    pub summary_ip: &'static str,
+    pub summary_network_ips: &'static str,
+    pub summary_copy: &'static str,
+    pub summary_copied: &'static str,
     pub summary_refresh_note: &'static str,
     pub summary_disks_heading: &'static str,
     pub summary_disk_mount: &'static str,
@@ -208,6 +301,76 @@ pub struct Strings {
     pub summary_updates_none: &'static str,
     pub summary_reboot_required: &'static str,
     pub summary_power_heading: &'static str,
+    pub summary_history_heading: &'static str,
+    pub summary_history_note: &'static str,
+    pub summary_history_waiting: &'static str,
+    pub summary_cpu_series: &'static str,
+    pub summary_memory_series: &'static str,
+    pub summary_range_live: &'static str,
+    pub summary_range_day: &'static str,
+    pub summary_range_week: &'static str,
+    pub summary_archive_note: &'static str,
+    pub summary_archive_reading: &'static str,
+    pub summary_archive_empty: &'static str,
+    pub summary_sysstat_missing: &'static str,
+    pub summary_sysstat_inactive: &'static str,
+    pub summary_sysstat_waiting: &'static str,
+    pub stalwart_open: &'static str,
+    pub stalwart_back: &'static str,
+    pub stalwart_no_container: &'static str,
+    pub stalwart_hostname_label: &'static str,
+    pub stalwart_hostname_hint: &'static str,
+    pub stalwart_hostname_invalid: &'static str,
+    pub stalwart_check: &'static str,
+    pub stalwart_checking: &'static str,
+    pub stalwart_first_check: &'static str,
+    pub stalwart_step_server: &'static str,
+    pub stalwart_step_dns: &'static str,
+    pub stalwart_step_wizard: &'static str,
+    pub stalwart_step_restart: &'static str,
+    pub stalwart_step_verify: &'static str,
+    pub stalwart_dns_note: &'static str,
+    pub stalwart_dns_before: &'static str,
+    pub stalwart_dns_zone: &'static str,
+    pub stalwart_from_zone_file: &'static str,
+    pub stalwart_ptr_note: &'static str,
+    pub stalwart_password_heading: &'static str,
+    pub stalwart_password_note: &'static str,
+    pub stalwart_copy_password: &'static str,
+    pub stalwart_open_wizard: &'static str,
+    pub stalwart_open_browser: &'static str,
+    pub stalwart_close_tunnel: &'static str,
+    pub stalwart_tunnel_opening: &'static str,
+    pub stalwart_no_wizard_target: &'static str,
+    pub stalwart_guide_1: &'static str,
+    pub stalwart_guide_2: &'static str,
+    pub stalwart_guide_3: &'static str,
+    pub stalwart_guide_4: &'static str,
+    pub stalwart_guide_5: &'static str,
+    pub stalwart_state_bootstrap: &'static str,
+    pub stalwart_state_needs_restart: &'static str,
+    pub stalwart_state_running: &'static str,
+    pub stalwart_state_down: &'static str,
+    pub stalwart_restart: &'static str,
+    pub stalwart_restart_hint: &'static str,
+    pub stalwart_restart_required: &'static str,
+    pub stalwart_dns_pending: &'static str,
+    pub stalwart_open_webui: &'static str,
+    pub stalwart_verify_note: &'static str,
+    pub stalwart_dkim_note: &'static str,
+    pub stalwart_export_zone: &'static str,
+    pub stalwart_export_failed: &'static str,
+    pub stalwart_show_file: &'static str,
+    pub stalwart_import_heading: &'static str,
+    pub stalwart_import_1: &'static str,
+    pub stalwart_import_2: &'static str,
+    pub stalwart_import_3: &'static str,
+    pub stalwart_import_4: &'static str,
+    pub stalwart_export_no_ip: &'static str,
+    pub summary_sysstat_install: &'static str,
+    pub summary_sysstat_enable: &'static str,
+    pub summary_sysstat_install_title: &'static str,
+    pub summary_sysstat_enable_title: &'static str,
 
     // Server Control page
     pub control_update_system: &'static str,
@@ -237,6 +400,23 @@ pub struct Strings {
     pub tools_status_not_installed: &'static str,
     pub tools_uninstall: &'static str,
     pub tools_manual_detect_note: &'static str,
+
+    // Nginx domain setup dialog
+    pub nginx_setup_button: &'static str,
+    pub nginx_setup_title: &'static str,
+    pub nginx_setup_target: &'static str,
+    pub nginx_field_domain: &'static str,
+    pub nginx_field_port: &'static str,
+    pub nginx_field_email: &'static str,
+    pub nginx_https_checkbox: &'static str,
+    pub nginx_setup_note: &'static str,
+    pub nginx_setup_submit: &'static str,
+    pub nginx_setup_busy: &'static str,
+    pub nginx_sites_heading: &'static str,
+    pub nginx_sites_empty: &'static str,
+    pub nginx_sites_no_proxy: &'static str,
+    pub nginx_sites_search_placeholder: &'static str,
+    pub nginx_sites_no_match: &'static str,
     pub tools_installed_note: &'static str,
     pub tools_package_search_note: &'static str,
     pub tools_install_desc_fallback: &'static str,
@@ -252,6 +432,7 @@ pub struct Strings {
     pub editor_explorer_heading: &'static str,
     pub editor_connect_hint: &'static str,
     pub editor_search: &'static str,
+    pub editor_search_tooltip: &'static str,
     pub editor_show_hidden: &'static str,
     pub editor_search_placeholder: &'static str,
     pub editor_empty_folder: &'static str,
@@ -339,6 +520,9 @@ pub struct Strings {
     pub db_sql_confirm_title: &'static str,
     pub db_sql_confirm_destructive_title: &'static str,
     pub docker_browse_data: &'static str,
+    pub docker_ports_public: &'static str,
+    pub docker_ports_local: &'static str,
+    pub docker_ports_internal: &'static str,
     pub db_browser_heading: &'static str,
     pub db_browser_back: &'static str,
     pub db_browser_pick_container: &'static str,
@@ -349,7 +533,45 @@ pub struct Strings {
     pub db_browser_pick_table: &'static str,
     pub db_browser_pick_table_desc: &'static str,
     pub db_browser_no_rows: &'static str,
+    pub db_browser_first_page: &'static str,
+    pub db_browser_prev_page: &'static str,
+    pub db_browser_next_page: &'static str,
+    pub db_browser_last_page: &'static str,
+    pub db_menu_truncate: &'static str,
+    pub db_menu_backup_sql: &'static str,
+    pub db_menu_export_csv: &'static str,
+    pub db_truncate_dialog_title: &'static str,
+    pub db_truncate_dialog_warning: &'static str,
+    pub db_truncate_dialog_ok: &'static str,
     pub fs_menu_chmod: &'static str,
+    pub fs_menu_info: &'static str,
+    pub fs_info_title: &'static str,
+    pub fs_info_file_title: &'static str,
+    pub fs_info_folder_title: &'static str,
+    pub fs_info_general: &'static str,
+    pub fs_info_ownership: &'static str,
+    pub fs_info_timestamps: &'static str,
+    pub fs_info_filesystem: &'static str,
+    pub fs_info_name: &'static str,
+    pub fs_info_path: &'static str,
+    pub fs_info_kind: &'static str,
+    pub fs_info_size: &'static str,
+    pub fs_info_items: &'static str,
+    pub fs_info_target: &'static str,
+    pub fs_info_owner: &'static str,
+    pub fs_info_group: &'static str,
+    pub fs_info_permissions: &'static str,
+    pub fs_info_modified: &'static str,
+    pub fs_info_changed: &'static str,
+    pub fs_info_accessed: &'static str,
+    pub fs_info_created: &'static str,
+    pub fs_info_inode: &'static str,
+    pub fs_info_links: &'static str,
+    pub fs_info_device: &'static str,
+    pub fs_info_blocks: &'static str,
+    pub fs_info_loading: &'static str,
+    pub fs_info_close: &'static str,
+    pub fs_info_open_chmod: &'static str,
     pub fs_chmod_title: &'static str,
     pub fs_chmod_read: &'static str,
     pub fs_chmod_write: &'static str,
@@ -378,6 +600,10 @@ pub struct Strings {
     pub fs_move_into_self: &'static str,
     pub fs_delete_title: &'static str,
     pub fs_delete_ok: &'static str,
+    pub fs_delete_sudo_title: &'static str,
+    pub fs_delete_sudo_ok: &'static str,
+    pub fs_delete_sudo_terminal_title: &'static str,
+    pub fs_delete_sudo_terminal_ok: &'static str,
     pub fs_invalid_name: &'static str,
     pub fs_invalid_path: &'static str,
     pub fs_import_nothing: &'static str,
@@ -488,10 +714,38 @@ pub struct Strings {
     pub docker_network_title: &'static str,
     pub docker_network_label: &'static str,
     pub docker_network_note: &'static str,
+    pub docker_tab_containers: &'static str,
+    pub docker_tab_images: &'static str,
+    pub docker_tab_volumes: &'static str,
+    pub docker_images_loading: &'static str,
+    pub docker_images_empty: &'static str,
+    pub docker_volumes_empty: &'static str,
+    pub docker_resources_no_match: &'static str,
+    pub docker_image_untagged: &'static str,
+    pub docker_image_unused: &'static str,
+    pub docker_image_pull: &'static str,
+    pub docker_image_pull_title: &'static str,
+    pub docker_image_pull_label: &'static str,
+    pub docker_image_pull_note: &'static str,
+    pub docker_image_update: &'static str,
+    pub docker_image_remove: &'static str,
+    pub docker_prune_dangling: &'static str,
+    pub docker_prune_unused: &'static str,
+    pub docker_volume_create: &'static str,
+    pub docker_volume_title: &'static str,
+    pub docker_volume_label: &'static str,
+    pub docker_volume_note: &'static str,
+    pub docker_volume_remove: &'static str,
+    pub docker_volume_prune: &'static str,
+    pub docker_volume_anonymous: &'static str,
+    pub docker_copy_mountpoint: &'static str,
+    pub docker_copied: &'static str,
+    pub docker_delete_container: &'static str,
+    pub docker_delete_ok: &'static str,
 }
 
 const EN: Strings = Strings {
-    app_tagline: "Awan Host Remote",
+    app_tagline: "Awan Host Manager",
 
     sidebar_manage_hosts: "Host",
     sidebar_workspace_label: "Workspace",
@@ -507,7 +761,27 @@ const EN: Strings = Strings {
     settings_language_heading: "Language",
     settings_language_desc: "Choose the app's display language.",
     settings_about_heading: "About",
-    settings_about_text: "Awan Host Remote — a desktop app for connecting to and controlling servers over SSH.",
+    settings_about_text: "Awan Host Manager — a desktop app for connecting to and controlling servers over SSH.",
+    settings_theme_light_desc: "Bright and crisp, for well-lit rooms.",
+    settings_theme_dark_desc: "Easier on the eyes at night.",
+    settings_info_heading: "Information",
+    settings_info_desc: "Version, features, and how the app keeps your servers safe.",
+    settings_about_open: "About Awan Host Manager",
+    settings_awan_apps_desc: "Explore more web and desktop applications by Awan Digitals.",
+    settings_contribute_desc: "Support the project, share feedback, or contribute code.",
+    about_back: "Settings",
+    about_features_heading: "What you can do",
+    about_feature_summary: "Live CPU, RAM, and disk charts with 24-hour and 7-day history.",
+    about_feature_terminal: "A full interactive shell with colors, vim, and htop support.",
+    about_feature_editor: "Browse remote folders and edit files with conflict checks.",
+    about_feature_docker: "Containers, Compose projects, images, volumes, and databases.",
+    about_feature_firewall: "Listening ports and UFW/firewalld rules in one place.",
+    about_feature_apps: "Install, check, and uninstall server packages.",
+    about_security_heading: "Security",
+    about_security_keyring: "Saved logins live in your operating system's credential store, never in plain text.",
+    about_security_hostkey: "Every server's host key is verified; new or changed keys need your approval.",
+    about_security_confirm: "Risky actions such as reboot, firewall changes, or deletes always ask first.",
+    about_built_with: "Built with",
 
     hosts_page_subtitle: "One profile per IP. A successfully saved login is available again after the app restarts.",
     hosts_empty: "No hosts yet. Add your first SSH server profile.",
@@ -519,6 +793,15 @@ const EN: Strings = Strings {
     hosts_delete_dialog_desc: "The profile and any login the app saved will be deleted. This host's session is closed if active. The private key file and the server itself are not touched.",
     hosts_delete_dialog_ok: "Delete profile & login",
     hosts_deleted_unsaved: "Unsaved profile removed from the list.",
+    hosts_edit: "Edit",
+
+    edit_host_title: "Edit connection",
+    edit_host_submit: "Save changes",
+    edit_host_auth_change_note: "Changing the authentication method deletes this host's saved login. Connect again and remember the login to save it.",
+    edit_host_disconnect_first: "Disconnect this host before editing its connection.",
+    host_connection_lost_title: "SSH disconnected",
+    edit_host_done: "Connection details updated.",
+    edit_host_login_removed: "Connection details updated. The saved login was deleted because the authentication method changed; connect again to save it.",
 
     add_host_field_name: "Host name",
     add_host_field_address: "IP address / hostname",
@@ -570,6 +853,10 @@ const EN: Strings = Strings {
     summary_uptime: "Uptime",
     summary_ssh: "SSH",
     summary_ssh_connected: "Connected to active host",
+    summary_ip: "IP address",
+    summary_network_ips: "Network IPs",
+    summary_copy: "Copy",
+    summary_copied: "Copied to clipboard",
     summary_refresh_note: "Refreshes every 5 seconds while Summary is open.",
     summary_disks_heading: "Storage Devices",
     summary_disk_mount: "Mount",
@@ -580,6 +867,76 @@ const EN: Strings = Strings {
     summary_updates_none: "System is up to date.",
     summary_reboot_required: "A reboot is required to finish applying recent updates.",
     summary_power_heading: "Power",
+    summary_history_heading: "CPU & Memory History",
+    summary_history_note: "Last ~5 minutes, sampled while Summary is open",
+    summary_history_waiting: "Collecting samples... The chart will appear after the second reading.",
+    summary_cpu_series: "CPU",
+    summary_memory_series: "Memory",
+    summary_range_live: "Live 5m",
+    summary_range_day: "24h",
+    summary_range_week: "7d",
+    summary_archive_note: "Recorded on the server by sysstat (sar), averaged per interval",
+    summary_archive_reading: "Reading sysstat history from the server...",
+    summary_archive_empty: "No samples in this range yet. sysstat records one sample every 10 minutes.",
+    summary_sysstat_missing: "sysstat is not installed on this server. Long-term CPU/RAM history is recorded by sysstat every 10 minutes; nothing is recorded before it is installed.",
+    summary_sysstat_inactive: "sysstat is installed but not recording (no new sample in the last 30 minutes).",
+    summary_sysstat_waiting: "sysstat collection is on; waiting for the first sample (up to 10 minutes). Press Reload to check again.",
+    stalwart_open: "Set up Stalwart",
+    stalwart_back: "Back to Docker",
+    stalwart_no_container: "Open this page from a Stalwart container on the Docker page.",
+    stalwart_hostname_label: "Mail server hostname",
+    stalwart_hostname_hint: "Full name of this server, e.g. mail.example.com. The mail domain is the part after the first dot.",
+    stalwart_hostname_invalid: "Enter a full hostname such as mail.example.com.",
+    stalwart_check: "Check",
+    stalwart_checking: "Checking the container, network and DNS on the server...",
+    stalwart_first_check: "Enter the hostname and press Check. The check only reads: it changes nothing on the server, the container or DNS.",
+    stalwart_step_server: "1. Server & container",
+    stalwart_step_dns: "2. DNS in Cloudflare (manual)",
+    stalwart_step_wizard: "3. Stalwart setup wizard",
+    stalwart_step_restart: "4. Restart",
+    stalwart_step_verify: "5. Verify",
+    stalwart_dns_note: "Create every record with Proxy status \"DNS only\" (grey cloud): the orange proxy carries only HTTP, so mail cannot pass through it. Turn off Cloudflare Email Routing for this domain; it locks MX and adds its own SPF.",
+    stalwart_dns_before: "Needed before the restart. With manual DNS, Let's Encrypt checks each of these names on port 443.",
+    stalwart_dns_zone: "Generated by Stalwart (keys and policy ids): after the wizard and restart, copy them from WebUI > Management > Domains > View Zone File.",
+    stalwart_from_zone_file: "value from the zone file",
+    stalwart_ptr_note: "Reverse DNS (PTR) is set in your VPS provider's panel, not in Cloudflare.",
+    stalwart_password_heading: "Temporary administrator (newest setup-mode start)",
+    stalwart_password_note: "Every start in setup mode prints a new password; only this newest one works. It is read from docker logs and not stored.",
+    stalwart_copy_password: "Copy password",
+    stalwart_open_wizard: "Open wizard",
+    stalwart_open_browser: "Open in browser",
+    stalwart_close_tunnel: "Close tunnel",
+    stalwart_tunnel_opening: "Opening the SSH tunnel...",
+    stalwart_no_wizard_target: "Port 8080 of the container cannot be reached, so the wizard cannot be opened.",
+    stalwart_guide_1: "Server identity: Server Hostname = the hostname above, Default Email Domain = the domain. Keep the automatic TLS certificate and email signing keys on.",
+    stalwart_guide_2: "Storage: keep the default (RocksDB).",
+    stalwart_guide_3: "Account directory: keep the internal directory.",
+    stalwart_guide_4: "Logging: choose Console. A container has no /var/log/stalwart; read logs with the Logs button on the Docker page.",
+    stalwart_guide_5: "DNS: Manual. Write down the admin@domain password shown at the end; it is shown only once.",
+    stalwart_state_bootstrap: "Setup mode: the wizard is waiting.",
+    stalwart_state_needs_restart: "The wizard has written config.json. Restart the container to start the mail server.",
+    stalwart_state_running: "Stalwart is running and answering on HTTPS.",
+    stalwart_state_down: "The container is not answering (stopped, or still starting).",
+    stalwart_restart: "Restart container",
+    stalwart_restart_hint: "Restart only after the records needed before the restart (step 2) resolve, so the certificate can be issued. Press Check again once the restart finishes.",
+    stalwart_restart_required: "A record and port 443 must be reachable before restarting so Let's Encrypt can issue certificates.",
+    stalwart_dns_pending: "Some records needed before the restart are not resolving yet.",
+    stalwart_open_webui: "Open WebUI",
+    stalwart_verify_note: "Last test: send a message to a Gmail address, open Show original, and check that SPF, DKIM and DMARC say PASS.",
+    stalwart_dkim_note: "DKIM selectors change with each key, so they are not checked here; compare them with the zone file.",
+    stalwart_export_zone: "Save file for Cloudflare import",
+    stalwart_export_failed: "Could not save the file",
+    stalwart_show_file: "Show file",
+    stalwart_import_heading: "Add them all at once with Cloudflare's import:",
+    stalwart_import_1: "Cloudflare > Email > Email Routing: disable it, and let it remove its MX and SPF records.",
+    stalwart_import_2: "Delete the old records listed below; an import only adds records, it never replaces them.",
+    stalwart_import_3: "DNS > Records > Import and Export > Import: upload the saved file, with Proxy imported DNS records turned off.",
+    stalwart_import_4: "Press Check. After the wizard and restart, import Stalwart's own zone file (WebUI > Domains > View Zone File) the same way to add DKIM, DMARC, MTA-STS, TLS-RPT and SRV in one go.",
+    stalwart_export_no_ip: "The server's public IP is unknown, so the A record cannot be written.",
+    summary_sysstat_install: "Install sysstat",
+    summary_sysstat_enable: "Enable sysstat",
+    summary_sysstat_install_title: "Install sysstat?",
+    summary_sysstat_enable_title: "Enable sysstat?",
 
     control_update_system: "Update System",
     control_reboot: "Reboot server",
@@ -606,6 +963,22 @@ const EN: Strings = Strings {
     tools_status_not_installed: "Not Installed",
     tools_uninstall: "Uninstall",
     tools_manual_detect_note: "An executable was found, but no catalog package was. Check how it was installed before changing anything.",
+
+    nginx_setup_button: "Set up domain & HTTPS",
+    nginx_setup_title: "Set up Nginx domain",
+    nginx_setup_target: "Target host",
+    nginx_field_domain: "Domain",
+    nginx_field_port: "App port on this server (127.0.0.1)",
+    nginx_field_email: "Email for Let's Encrypt (optional)",
+    nginx_https_checkbox: "Enable HTTPS with Let's Encrypt (requires Certbot)",
+    nginx_setup_note: "DNS must point to this server and ports 80/443 must be open. Existing configs are never overwritten and the firewall is not changed. Progress shows in the terminal panel.",
+    nginx_setup_submit: "Run setup",
+    nginx_setup_busy: "Setup not started: wait for the running operation to finish.",
+    nginx_sites_heading: "Domains",
+    nginx_sites_empty: "No domains yet. Files in sites-enabled and conf.d that this SSH account cannot read are skipped.",
+    nginx_sites_no_proxy: "No proxy",
+    nginx_sites_search_placeholder: "Search domain, port, or file",
+    nginx_sites_no_match: "No domain matches the search.",
     tools_installed_note: "\"Installed\" shows a package is present; it doesn't mean the service is running or configured.",
     tools_package_search_note: "This list includes libraries and system packages. Uninstalling can affect services that depend on them.",
     tools_install_desc_fallback: "The package is installed from a repository already configured on the server.",
@@ -619,6 +992,7 @@ const EN: Strings = Strings {
     editor_explorer_heading: "Explorer",
     editor_connect_hint: "Connect via SSH to browse server folders.",
     editor_search: "Search",
+    editor_search_tooltip: "Find in document (Ctrl+F)",
     editor_show_hidden: "Show hidden files",
     editor_search_placeholder: "Search files...",
     editor_empty_folder: "Folder is empty, or no name matches the filter.",
@@ -705,6 +1079,9 @@ const EN: Strings = Strings {
     db_sql_confirm_title: "Run this query? It changes the database",
     db_sql_confirm_destructive_title: "Run this query? It deletes or alters data",
     docker_browse_data: "Browse data (databases & tables)",
+    docker_ports_public: "Public",
+    docker_ports_local: "Local",
+    docker_ports_internal: "Internal",
     db_browser_heading: "Database Browser",
     db_browser_back: "Docker",
     db_browser_pick_container: "Open a database container from the Docker page with the table button.",
@@ -715,7 +1092,45 @@ const EN: Strings = Strings {
     db_browser_pick_table: "Choose a table",
     db_browser_pick_table_desc: "Open a database on the left, then click a table to see its rows.",
     db_browser_no_rows: "No rows on this page.",
+    db_browser_first_page: "First page",
+    db_browser_prev_page: "Previous page",
+    db_browser_next_page: "Next page",
+    db_browser_last_page: "Last page",
+    db_menu_truncate: "Truncate table...",
+    db_menu_backup_sql: "Backup table (.sql)...",
+    db_menu_export_csv: "Export to Excel (.csv)...",
+    db_truncate_dialog_title: "Truncate Table",
+    db_truncate_dialog_warning: "This will permanently delete all rows in this table. This action cannot be undone.",
+    db_truncate_dialog_ok: "Truncate Table",
     fs_menu_chmod: "Permissions (chmod)",
+    fs_menu_info: "Properties (Info)",
+    fs_info_title: "Properties",
+    fs_info_file_title: "File Properties",
+    fs_info_folder_title: "Folder Properties",
+    fs_info_general: "General",
+    fs_info_ownership: "Ownership & Permissions",
+    fs_info_timestamps: "Timestamps",
+    fs_info_filesystem: "Filesystem Details",
+    fs_info_name: "Name",
+    fs_info_path: "Location",
+    fs_info_kind: "Kind",
+    fs_info_size: "Size",
+    fs_info_items: "Contents",
+    fs_info_target: "Link target",
+    fs_info_owner: "Owner (User)",
+    fs_info_group: "Group",
+    fs_info_permissions: "Permissions (Chmod)",
+    fs_info_modified: "Modified",
+    fs_info_changed: "Metadata changed",
+    fs_info_accessed: "Accessed",
+    fs_info_created: "Created",
+    fs_info_inode: "Inode number",
+    fs_info_links: "Hard links",
+    fs_info_device: "Device ID",
+    fs_info_blocks: "Disk usage",
+    fs_info_loading: "Reading file information...",
+    fs_info_close: "Close",
+    fs_info_open_chmod: "Change Permissions...",
     fs_chmod_title: "Change permissions",
     fs_chmod_read: "Read",
     fs_chmod_write: "Write",
@@ -744,6 +1159,10 @@ const EN: Strings = Strings {
     fs_move_into_self: "A folder cannot be moved into itself.",
     fs_delete_title: "Delete this permanently?",
     fs_delete_ok: "Delete",
+    fs_delete_sudo_title: "Permission Denied (Root Ownership)",
+    fs_delete_sudo_ok: "Delete with sudo",
+    fs_delete_sudo_terminal_title: "Sudo Password Required",
+    fs_delete_sudo_terminal_ok: "Open in Terminal",
     fs_invalid_name: "Name cannot be empty, contain '/', or control characters.",
     fs_invalid_path: "Enter an absolute Linux path, e.g. /home/ubuntu/app.",
     fs_import_nothing: "Nothing was selected to import.",
@@ -852,10 +1271,38 @@ const EN: Strings = Strings {
     docker_network_title: "Create Docker network",
     docker_network_label: "Network name",
     docker_network_note: "Creates a bridge network (e.g. edge) that a reverse proxy and several Compose projects can share; declare it in compose.yaml as external: true. If the network already exists, nothing is changed.",
+    docker_tab_containers: "Containers",
+    docker_tab_images: "Images",
+    docker_tab_volumes: "Volumes",
+    docker_images_loading: "Reading images and volumes...",
+    docker_images_empty: "No images on this server yet. Pull one to get started.",
+    docker_volumes_empty: "No volumes on this server yet.",
+    docker_resources_no_match: "Nothing matches the search.",
+    docker_image_untagged: "<untagged>",
+    docker_image_unused: "Unused",
+    docker_image_pull: "Pull image",
+    docker_image_pull_title: "Pull image",
+    docker_image_pull_label: "Image (name:tag)",
+    docker_image_pull_note: "Downloads the image from its registry (Docker Hub when no registry is named), e.g. nginx:alpine or ghcr.io/org/app:1.2. Running containers keep using the old image until they are recreated.",
+    docker_image_update: "Pull the latest build of this tag",
+    docker_image_remove: "Delete image",
+    docker_prune_dangling: "Remove untagged",
+    docker_prune_unused: "Remove all unused",
+    docker_volume_create: "Create volume",
+    docker_volume_title: "Create volume",
+    docker_volume_label: "Volume name",
+    docker_volume_note: "Creates an empty named volume (local driver). Mount it in compose.yaml under volumes:, declared as external: true if Compose did not create it.",
+    docker_volume_remove: "Delete volume and its data",
+    docker_volume_prune: "Remove unused volumes",
+    docker_volume_anonymous: "anonymous",
+    docker_copy_mountpoint: "Copy folder path on the server",
+    docker_copied: "Copied.",
+    docker_delete_container: "Delete container",
+    docker_delete_ok: "Yes, delete",
 };
 
 const ID: Strings = Strings {
-    app_tagline: "Awan Host Remote",
+    app_tagline: "Awan Host Manager",
 
     sidebar_manage_hosts: "Host",
     sidebar_workspace_label: "Ruang Kerja",
@@ -871,7 +1318,27 @@ const ID: Strings = Strings {
     settings_language_heading: "Bahasa",
     settings_language_desc: "Pilih bahasa tampilan aplikasi.",
     settings_about_heading: "Tentang",
-    settings_about_text: "Awan Host Remote — aplikasi desktop untuk menghubungkan dan mengontrol server melalui SSH.",
+    settings_about_text: "Awan Host Manager — aplikasi desktop untuk menghubungkan dan mengontrol server melalui SSH.",
+    settings_theme_light_desc: "Cerah dan bersih, cocok untuk ruangan terang.",
+    settings_theme_dark_desc: "Lebih nyaman di mata saat malam.",
+    settings_info_heading: "Informasi",
+    settings_info_desc: "Versi, fitur, dan cara aplikasi menjaga keamanan server Anda.",
+    settings_about_open: "Tentang Awan Host Manager",
+    settings_awan_apps_desc: "Jelajahi aplikasi web dan desktop lainnya dari Awan Digitals.",
+    settings_contribute_desc: "Dukung pengembangan, berikan masukan, atau berkontribusi.",
+    about_back: "Pengaturan",
+    about_features_heading: "Yang bisa Anda lakukan",
+    about_feature_summary: "Grafik CPU, RAM, dan disk secara langsung, dengan riwayat 24 jam dan 7 hari.",
+    about_feature_terminal: "Shell interaktif penuh dengan warna, mendukung vim dan htop.",
+    about_feature_editor: "Jelajahi folder server dan edit file dengan pemeriksaan konflik.",
+    about_feature_docker: "Container, project Compose, image, volume, dan database.",
+    about_feature_firewall: "Port yang listening serta aturan UFW/firewalld dalam satu tempat.",
+    about_feature_apps: "Install, periksa, dan uninstall paket di server.",
+    about_security_heading: "Keamanan",
+    about_security_keyring: "Login tersimpan disimpan di penyimpanan kredensial sistem operasi, tidak pernah dalam teks biasa.",
+    about_security_hostkey: "Host key setiap server diverifikasi; key baru atau yang berubah perlu persetujuan Anda.",
+    about_security_confirm: "Tindakan berisiko seperti reboot, perubahan firewall, atau penghapusan selalu meminta konfirmasi.",
+    about_built_with: "Dibangun dengan",
 
     hosts_page_subtitle: "Satu profil per IP. Login yang berhasil disimpan tersedia lagi setelah aplikasi dibuka ulang.",
     hosts_empty: "Belum ada host. Tambahkan profil server SSH pertama Anda.",
@@ -883,6 +1350,15 @@ const ID: Strings = Strings {
     hosts_delete_dialog_desc: "Profil beserta login yang disimpan aplikasi akan dihapus. Sesi host ini ditutup jika aktif. File private key dan server tidak dihapus.",
     hosts_delete_dialog_ok: "Hapus profil & login",
     hosts_deleted_unsaved: "Profil yang belum disimpan telah dihapus dari daftar.",
+    hosts_edit: "Edit",
+
+    edit_host_title: "Edit koneksi",
+    edit_host_submit: "Simpan perubahan",
+    edit_host_auth_change_note: "Mengganti metode autentikasi menghapus login tersimpan host ini. Sambungkan ulang dan simpan login untuk menyimpannya kembali.",
+    edit_host_disconnect_first: "Putuskan koneksi host ini sebelum mengedit koneksinya.",
+    host_connection_lost_title: "SSH terputus",
+    edit_host_done: "Detail koneksi diperbarui.",
+    edit_host_login_removed: "Detail koneksi diperbarui. Login tersimpan dihapus karena metode autentikasi berubah; sambungkan ulang untuk menyimpannya.",
 
     add_host_field_name: "Nama host",
     add_host_field_address: "IP address / hostname",
@@ -934,6 +1410,10 @@ const ID: Strings = Strings {
     summary_uptime: "Uptime",
     summary_ssh: "SSH",
     summary_ssh_connected: "Terhubung ke host aktif",
+    summary_ip: "Alamat IP",
+    summary_network_ips: "IP jaringan",
+    summary_copy: "Salin",
+    summary_copied: "Disalin ke clipboard",
     summary_refresh_note: "Pembaruan setiap 5 detik saat Summary terbuka.",
     summary_disks_heading: "Perangkat Penyimpanan",
     summary_disk_mount: "Mount",
@@ -944,6 +1424,76 @@ const ID: Strings = Strings {
     summary_updates_none: "Sistem sudah yang terbaru.",
     summary_reboot_required: "Reboot diperlukan untuk menyelesaikan penerapan pembaruan terbaru.",
     summary_power_heading: "Daya",
+    summary_history_heading: "Riwayat CPU & Memori",
+    summary_history_note: "~5 menit terakhir, diambil selama Summary terbuka",
+    summary_history_waiting: "Mengumpulkan sampel... Grafik akan muncul setelah pembacaan kedua.",
+    summary_cpu_series: "CPU",
+    summary_memory_series: "Memori",
+    summary_range_live: "Live 5 mnt",
+    summary_range_day: "24 jam",
+    summary_range_week: "7 hari",
+    summary_archive_note: "Dicatat di server oleh sysstat (sar), dirata-rata per interval",
+    summary_archive_reading: "Membaca riwayat sysstat dari server...",
+    summary_archive_empty: "Belum ada sampel pada rentang ini. sysstat mencatat satu sampel setiap 10 menit.",
+    summary_sysstat_missing: "sysstat belum terpasang di server ini. Riwayat CPU/RAM jangka panjang dicatat oleh sysstat setiap 10 menit; data sebelum sysstat terpasang tidak tersedia.",
+    summary_sysstat_inactive: "sysstat sudah terpasang tetapi belum mencatat (tidak ada sampel baru dalam 30 menit terakhir).",
+    summary_sysstat_waiting: "Pencatatan sysstat sudah aktif; menunggu sampel pertama (maks. 10 menit). Tekan Muat ulang untuk memeriksa lagi.",
+    stalwart_open: "Setup Stalwart",
+    stalwart_back: "Kembali ke Docker",
+    stalwart_no_container: "Buka halaman ini dari container Stalwart di halaman Docker.",
+    stalwart_hostname_label: "Hostname mail server",
+    stalwart_hostname_hint: "Nama lengkap server ini, misalnya mail.example.com. Domain email adalah bagian setelah titik pertama.",
+    stalwart_hostname_invalid: "Isi hostname lengkap seperti mail.example.com.",
+    stalwart_check: "Periksa",
+    stalwart_checking: "Memeriksa container, jaringan, dan DNS dari server...",
+    stalwart_first_check: "Isi hostname lalu tekan Periksa. Pemeriksaan hanya membaca: tidak ada yang diubah di server, container, maupun DNS.",
+    stalwart_step_server: "1. Server & container",
+    stalwart_step_dns: "2. DNS di Cloudflare (manual)",
+    stalwart_step_wizard: "3. Wizard setup Stalwart",
+    stalwart_step_restart: "4. Restart",
+    stalwart_step_verify: "5. Verifikasi",
+    stalwart_dns_note: "Buat semua record dengan Proxy status \"DNS only\" (awan abu-abu): proxy oranye hanya meneruskan HTTP, jadi email tidak bisa lewat. Matikan Cloudflare Email Routing untuk domain ini; fitur itu mengunci MX dan menambah SPF sendiri.",
+    stalwart_dns_before: "Wajib sebelum restart. Dengan DNS manual, Let's Encrypt memeriksa setiap nama ini di port 443.",
+    stalwart_dns_zone: "Dibuat oleh Stalwart (kunci dan id kebijakan): setelah wizard dan restart, salin dari WebUI > Management > Domains > View Zone File.",
+    stalwart_from_zone_file: "nilai dari zone file",
+    stalwart_ptr_note: "Reverse DNS (PTR) diatur di panel provider VPS, bukan di Cloudflare.",
+    stalwart_password_heading: "Administrator sementara (start mode setup terbaru)",
+    stalwart_password_note: "Setiap start dalam mode setup mencetak password baru; hanya yang terbaru ini yang berlaku. Dibaca dari docker logs dan tidak disimpan.",
+    stalwart_copy_password: "Salin password",
+    stalwart_open_wizard: "Buka wizard",
+    stalwart_open_browser: "Buka di browser",
+    stalwart_close_tunnel: "Tutup tunnel",
+    stalwart_tunnel_opening: "Membuka SSH tunnel...",
+    stalwart_no_wizard_target: "Port 8080 container tidak bisa dijangkau, jadi wizard tidak dapat dibuka.",
+    stalwart_guide_1: "Identitas server: Server Hostname = hostname di atas, Default Email Domain = domainnya. Biarkan sertifikat TLS otomatis dan kunci tanda tangan email tetap aktif.",
+    stalwart_guide_2: "Storage: biarkan default (RocksDB).",
+    stalwart_guide_3: "Direktori akun: biarkan direktori internal.",
+    stalwart_guide_4: "Logging: pilih Console. Container tidak punya /var/log/stalwart; baca log lewat tombol Logs di halaman Docker.",
+    stalwart_guide_5: "DNS: Manual. Catat password admin@domain yang tampil di akhir; hanya ditampilkan sekali.",
+    stalwart_state_bootstrap: "Mode setup: wizard menunggu diisi.",
+    stalwart_state_needs_restart: "Wizard sudah menulis config.json. Restart container untuk menjalankan mail server.",
+    stalwart_state_running: "Stalwart berjalan dan menjawab di HTTPS.",
+    stalwart_state_down: "Container tidak menjawab (berhenti, atau masih starting).",
+    stalwart_restart: "Restart container",
+    stalwart_restart_hint: "Restart hanya setelah record yang wajib sebelum restart (langkah 2) sudah resolve, agar sertifikat bisa terbit. Tekan Periksa lagi setelah restart selesai.",
+    stalwart_restart_required: "A record dan port 443 wajib aktif dan mengarah ke server ini agar sertifikat Let's Encrypt dapat diterbitkan saat restart.",
+    stalwart_dns_pending: "Sebagian record yang wajib sebelum restart belum resolve.",
+    stalwart_open_webui: "Buka WebUI",
+    stalwart_verify_note: "Uji terakhir: kirim email ke alamat Gmail, buka Show original, dan pastikan SPF, DKIM, dan DMARC bernilai PASS.",
+    stalwart_dkim_note: "Selector DKIM berganti setiap kunci, jadi tidak diperiksa di sini; cocokkan dengan zone file.",
+    stalwart_export_zone: "Simpan file import Cloudflare",
+    stalwart_export_failed: "File tidak dapat disimpan",
+    stalwart_show_file: "Tampilkan file",
+    stalwart_import_heading: "Tambahkan sekaligus lewat import Cloudflare:",
+    stalwart_import_1: "Cloudflare > Email > Email Routing: nonaktifkan, dan izinkan ia menghapus record MX dan SPF-nya.",
+    stalwart_import_2: "Hapus record lama di daftar bawah; import hanya menambah record, tidak pernah mengganti.",
+    stalwart_import_3: "DNS > Records > Import and Export > Import: upload file yang disimpan, dengan Proxy imported DNS records dimatikan.",
+    stalwart_import_4: "Tekan Periksa. Setelah wizard dan restart, import zone file milik Stalwart (WebUI > Domains > View Zone File) dengan cara yang sama untuk menambah DKIM, DMARC, MTA-STS, TLS-RPT, dan SRV sekaligus.",
+    stalwart_export_no_ip: "IP publik server tidak diketahui, jadi record A tidak bisa ditulis.",
+    summary_sysstat_install: "Install sysstat",
+    summary_sysstat_enable: "Aktifkan sysstat",
+    summary_sysstat_install_title: "Install sysstat?",
+    summary_sysstat_enable_title: "Aktifkan sysstat?",
 
     control_update_system: "Update System",
     control_reboot: "Reboot server",
@@ -970,6 +1520,22 @@ const ID: Strings = Strings {
     tools_status_not_installed: "Not Installed",
     tools_uninstall: "Uninstall",
     tools_manual_detect_note: "Executable tersedia, tetapi paket katalog tidak ditemukan. Periksa asal instalasi sebelum mengubahnya.",
+
+    nginx_setup_button: "Setup domain & HTTPS",
+    nginx_setup_title: "Setup domain Nginx",
+    nginx_setup_target: "Host tujuan",
+    nginx_field_domain: "Domain",
+    nginx_field_port: "Port aplikasi di server ini (127.0.0.1)",
+    nginx_field_email: "Email untuk Let's Encrypt (opsional)",
+    nginx_https_checkbox: "Aktifkan HTTPS dengan Let's Encrypt (perlu Certbot)",
+    nginx_setup_note: "DNS harus mengarah ke server ini dan port 80/443 terbuka. Konfigurasi yang sudah ada tidak pernah ditimpa dan firewall tidak diubah. Progres tampil di panel terminal.",
+    nginx_setup_submit: "Jalankan setup",
+    nginx_setup_busy: "Setup belum dimulai: tunggu operasi yang sedang berjalan selesai.",
+    nginx_sites_heading: "Domain",
+    nginx_sites_empty: "Belum ada domain. File di sites-enabled dan conf.d yang tidak dapat dibaca akun SSH ini dilewati.",
+    nginx_sites_no_proxy: "Tanpa proxy",
+    nginx_sites_search_placeholder: "Cari domain, port, atau file",
+    nginx_sites_no_match: "Tidak ada domain yang cocok.",
     tools_installed_note: "Installed menunjukkan paket terpasang; tidak menjamin layanan sedang berjalan atau sudah dikonfigurasi.",
     tools_package_search_note: "Daftar ini mencakup library dan paket sistem. Uninstall dapat memengaruhi layanan yang bergantung padanya.",
     tools_install_desc_fallback: "Paket dipasang dari repository yang sudah dikonfigurasi pada server.",
@@ -983,6 +1549,7 @@ const ID: Strings = Strings {
     editor_explorer_heading: "Explorer",
     editor_connect_hint: "Hubungkan SSH untuk menjelajahi folder server.",
     editor_search: "Cari",
+    editor_search_tooltip: "Cari di dokumen (Ctrl+F)",
     editor_show_hidden: "Tampilkan file tersembunyi",
     editor_search_placeholder: "Cari file...",
     editor_empty_folder: "Folder kosong atau tidak ada nama yang cocok dengan filter.",
@@ -1069,6 +1636,9 @@ const ID: Strings = Strings {
     db_sql_confirm_title: "Jalankan query ini? Database akan berubah",
     db_sql_confirm_destructive_title: "Jalankan query ini? Data/struktur akan dihapus atau diubah",
     docker_browse_data: "Lihat data (database & tabel)",
+    docker_ports_public: "Publik",
+    docker_ports_local: "Lokal",
+    docker_ports_internal: "Internal",
     db_browser_heading: "Database Browser",
     db_browser_back: "Docker",
     db_browser_pick_container: "Buka container database dari halaman Docker lewat tombol tabel.",
@@ -1079,7 +1649,45 @@ const ID: Strings = Strings {
     db_browser_pick_table: "Pilih tabel",
     db_browser_pick_table_desc: "Buka database di sebelah kiri, lalu klik tabel untuk melihat isinya.",
     db_browser_no_rows: "Tidak ada baris di halaman ini.",
+    db_browser_first_page: "Halaman pertama",
+    db_browser_prev_page: "Halaman sebelumnya",
+    db_browser_next_page: "Halaman berikutnya",
+    db_browser_last_page: "Halaman terakhir",
+    db_menu_truncate: "Truncate tabel...",
+    db_menu_backup_sql: "Backup data (.sql)...",
+    db_menu_export_csv: "Export ke Excel (.csv)...",
+    db_truncate_dialog_title: "Truncate Tabel",
+    db_truncate_dialog_warning: "Tindakan ini akan menghapus seluruh data pada tabel ini secara permanen. Tidak dapat dibatalkan.",
+    db_truncate_dialog_ok: "Truncate Tabel",
     fs_menu_chmod: "Ubah izin (chmod)",
+    fs_menu_info: "Informasi (Info)",
+    fs_info_title: "Informasi",
+    fs_info_file_title: "Informasi File",
+    fs_info_folder_title: "Informasi Folder",
+    fs_info_general: "Umum",
+    fs_info_ownership: "Kepemilikan & Izin Akses",
+    fs_info_timestamps: "Waktu & Tanggal",
+    fs_info_filesystem: "Detail Sistem File",
+    fs_info_name: "Nama",
+    fs_info_path: "Lokasi",
+    fs_info_kind: "Jenis",
+    fs_info_size: "Ukuran",
+    fs_info_items: "Isi Folder",
+    fs_info_target: "Target tautan",
+    fs_info_owner: "Pemilik (User)",
+    fs_info_group: "Grup",
+    fs_info_permissions: "Izin Akses (Chmod)",
+    fs_info_modified: "Terakhir Diubah",
+    fs_info_changed: "Metadata Diubah",
+    fs_info_accessed: "Terakhir Diakses",
+    fs_info_created: "Tanggal Dibuat",
+    fs_info_inode: "Nomor Inode",
+    fs_info_links: "Tautan Keras (Links)",
+    fs_info_device: "ID Perangkat",
+    fs_info_blocks: "Pemakaian Disk",
+    fs_info_loading: "Membaca informasi file/folder...",
+    fs_info_close: "Tutup",
+    fs_info_open_chmod: "Ubah Izin (Chmod)...",
     fs_chmod_title: "Ubah izin",
     fs_chmod_read: "Baca",
     fs_chmod_write: "Tulis",
@@ -1108,6 +1716,10 @@ const ID: Strings = Strings {
     fs_move_into_self: "Folder tidak dapat dipindahkan ke dalam dirinya sendiri.",
     fs_delete_title: "Hapus permanen?",
     fs_delete_ok: "Hapus",
+    fs_delete_sudo_title: "Izin Ditolak (Dimiliki Root)",
+    fs_delete_sudo_ok: "Hapus dengan sudo",
+    fs_delete_sudo_terminal_title: "Sudo Memerlukan Password",
+    fs_delete_sudo_terminal_ok: "Buka di Terminal",
     fs_invalid_name: "Nama tidak boleh kosong, mengandung '/', atau karakter kontrol.",
     fs_invalid_path: "Masukkan path absolut Linux, misalnya /home/ubuntu/app.",
     fs_import_nothing: "Tidak ada yang dipilih untuk diimpor.",
@@ -1216,6 +1828,34 @@ const ID: Strings = Strings {
     docker_network_title: "Buat network Docker",
     docker_network_label: "Nama network",
     docker_network_note: "Membuat network bridge (mis. edge) yang dapat dipakai bersama oleh reverse proxy dan beberapa project Compose; deklarasikan di compose.yaml sebagai external: true. Jika network sudah ada, tidak ada yang diubah.",
+    docker_tab_containers: "Containers",
+    docker_tab_images: "Images",
+    docker_tab_volumes: "Volumes",
+    docker_images_loading: "Membaca image dan volume...",
+    docker_images_empty: "Belum ada image di server ini. Pull image untuk memulai.",
+    docker_volumes_empty: "Belum ada volume di server ini.",
+    docker_resources_no_match: "Tidak ada yang cocok dengan pencarian.",
+    docker_image_untagged: "<tanpa tag>",
+    docker_image_unused: "Tidak dipakai",
+    docker_image_pull: "Pull image",
+    docker_image_pull_title: "Pull image",
+    docker_image_pull_label: "Image (nama:tag)",
+    docker_image_pull_note: "Mengunduh image dari registry-nya (Docker Hub jika registry tidak disebut), mis. nginx:alpine atau ghcr.io/org/app:1.2. Container yang sedang berjalan tetap memakai image lama sampai dibuat ulang.",
+    docker_image_update: "Pull build terbaru dari tag ini",
+    docker_image_remove: "Hapus image",
+    docker_prune_dangling: "Hapus yang tanpa tag",
+    docker_prune_unused: "Hapus semua yang tak terpakai",
+    docker_volume_create: "Buat volume",
+    docker_volume_title: "Buat volume",
+    docker_volume_label: "Nama volume",
+    docker_volume_note: "Membuat named volume kosong (driver local). Pasang di compose.yaml pada bagian volumes:, dideklarasikan sebagai external: true jika volume tidak dibuat oleh Compose.",
+    docker_volume_remove: "Hapus volume beserta datanya",
+    docker_volume_prune: "Hapus volume tak terpakai",
+    docker_volume_anonymous: "anonim",
+    docker_copy_mountpoint: "Salin path folder di server",
+    docker_copied: "Disalin.",
+    docker_delete_container: "Hapus container",
+    docker_delete_ok: "Ya, hapus",
 };
 
 pub fn strings(lang: Language) -> &'static Strings {
@@ -1238,8 +1878,12 @@ pub fn delete_host_title(lang: Language, host_name: &str) -> String {
 
 pub fn profiles_skipped(lang: Language, skipped: usize) -> String {
     match lang {
-        Language::English => format!("{skipped} saved profile(s) could not be read and were skipped. They were not deleted automatically."),
-        Language::Indonesian => format!("{skipped} profil tersimpan tidak dapat dibaca dan dilewati. Entri tersebut tidak dihapus otomatis."),
+        Language::English => format!(
+            "{skipped} saved profile(s) could not be read and were skipped. They were not deleted automatically."
+        ),
+        Language::Indonesian => format!(
+            "{skipped} profil tersimpan tidak dapat dibaca dan dilewati. Entri tersebut tidak dihapus otomatis."
+        ),
     }
 }
 
@@ -1250,6 +1894,24 @@ pub fn profile_deleted(lang: Language, address: &str) -> String {
     }
 }
 
+pub fn nginx_domain_taken(lang: Language, domain: &str, file: &str) -> String {
+    match lang {
+        Language::English => format!(
+            "{domain} is already configured in {file}. Setup only continues if that file was made by this app."
+        ),
+        Language::Indonesian => format!(
+            "{domain} sudah dikonfigurasi di {file}. Setup hanya berlanjut bila file itu dibuat oleh aplikasi ini."
+        ),
+    }
+}
+
+pub fn nginx_port_taken(lang: Language, port: u16, domain: &str) -> String {
+    match lang {
+        Language::English => format!("Port {port} is already proxied by {domain}."),
+        Language::Indonesian => format!("Port {port} sudah dipakai proxy {domain}."),
+    }
+}
+
 pub fn host_already_exists(lang: Language) -> String {
     match lang {
         Language::English => "This IP/address already exists. Pick the profile on Hosts to connect, or delete it first to change it.".into(),
@@ -1257,10 +1919,421 @@ pub fn host_already_exists(lang: Language) -> String {
     }
 }
 
+pub fn host_connection_lost(lang: Language, name: &str, reason: Option<&str>) -> String {
+    let message = match lang {
+        Language::English => format!("The connection to {name} was lost. Reconnect it from Hosts."),
+        Language::Indonesian => format!("Koneksi ke {name} terputus. Sambungkan ulang dari Hosts."),
+    };
+    match reason {
+        Some(reason) => format!("{message}\n{reason}"),
+        None => message,
+    }
+}
+
 pub fn trust_new_host(lang: Language, host: &str, algorithm: &str, fingerprint: &str) -> String {
     match lang {
         Language::English => format!("New host: {host} ({algorithm})\n{fingerprint}"),
         Language::Indonesian => format!("Host baru: {host} ({algorithm})\n{fingerprint}"),
+    }
+}
+
+pub fn stalwart_heading(lang: Language, container: &str) -> String {
+    match lang {
+        Language::English => format!("Stalwart Â· container {container}"),
+        Language::Indonesian => format!("Stalwart Â· container {container}"),
+    }
+}
+
+pub fn stalwart_domain(lang: Language, domain: &str, ip: &str) -> String {
+    match lang {
+        Language::English => format!("Mail domain: {domain} Â· server public IP: {ip}"),
+        Language::Indonesian => format!("Domain email: {domain} Â· IP publik server: {ip}"),
+    }
+}
+
+pub fn stalwart_tunnel_open(lang: Language, port: u16, target: &str) -> String {
+    match lang {
+        Language::English => format!(
+            "Tunnel open: http://127.0.0.1:{port}/admin -> {target} on the server. It closes with the SSH session."
+        ),
+        Language::Indonesian => format!(
+            "Tunnel terbuka: http://127.0.0.1:{port}/admin -> {target} di server. Tertutup bersama sesi SSH."
+        ),
+    }
+}
+
+/// Name of a server/container check on the Stalwart Setup page.
+pub fn stalwart_check_label(lang: Language, key: &str) -> String {
+    let en = lang == Language::English;
+    match key {
+        "container" => "Container".into(),
+        "mounts" => {
+            if en {
+                "Persistent volumes".into()
+            } else {
+                "Volume persisten".into()
+            }
+        }
+        "port_25" => "Port 25 (SMTP)".into(),
+        "port_465" => "Port 465 (Submission)".into(),
+        "port_993" => "Port 993 (IMAPS)".into(),
+        "port_443" => "Port 443 (HTTPS)".into(),
+        "port_8080" => {
+            if en {
+                "Port 8080 (setup wizard)".into()
+            } else {
+                "Port 8080 (wizard setup)".into()
+            }
+        }
+        "outbound_25" => {
+            if en {
+                "Outbound port 25".into()
+            } else {
+                "Port 25 keluar".into()
+            }
+        }
+        "ptr" => "Reverse DNS (PTR)".into(),
+        "https" => "HTTPS".into(),
+        "certificate" => {
+            if en {
+                "TLS certificate".into()
+            } else {
+                "Sertifikat TLS".into()
+            }
+        }
+        other => other.into(),
+    }
+}
+
+/// What a server/container check's result means, in plain words.
+pub fn stalwart_check_detail(
+    lang: Language,
+    key: &str,
+    ok: bool,
+    detail: &str,
+    hostname: &str,
+) -> String {
+    let en = lang == Language::English;
+    let port = key.strip_prefix("port_").unwrap_or("");
+    match (key, detail) {
+        ("container", "not-found") => {
+            if en {
+                "Container not found.".into()
+            } else {
+                "Container tidak ditemukan.".into()
+            }
+        }
+        ("container", image) => match (ok, en) {
+            (true, true) => format!("Running Â· {image}"),
+            (true, false) => format!("Berjalan Â· {image}"),
+            (false, true) => format!("Not running Â· {image}. Start it on the Docker page."),
+            (false, false) => format!("Tidak berjalan Â· {image}. Jalankan dari halaman Docker."),
+        },
+        ("mounts", "") => {
+            if en {
+                "/etc/stalwart and /var/lib/stalwart are mounted volumes.".into()
+            } else {
+                "/etc/stalwart dan /var/lib/stalwart memakai volume.".into()
+            }
+        }
+        ("mounts", missing) => {
+            if en {
+                format!(
+                    "Not a volume: {missing}. The configuration or mail is lost when the container is recreated."
+                )
+            } else {
+                format!(
+                    "Bukan volume: {missing}. Konfigurasi atau email hilang saat container dibuat ulang."
+                )
+            }
+        }
+        ("port_8080", "loopback") => {
+            if en {
+                "Published on 127.0.0.1 only (safe).".into()
+            } else {
+                "Dipublish hanya di 127.0.0.1 (aman).".into()
+            }
+        }
+        ("port_8080", "internal") => {
+            if en {
+                "Not published; the tunnel goes to the container's own address.".into()
+            } else {
+                "Tidak dipublish; tunnel langsung ke alamat container.".into()
+            }
+        }
+        ("port_8080", "public") => {
+            if en {
+                "Open to the internet, and the wizard has no protection against password guessing. Publish it as 127.0.0.1:8080:8080.".into()
+            } else {
+                "Terbuka ke internet, padahal wizard tidak terlindungi dari tebak password. Publish sebagai 127.0.0.1:8080:8080.".into()
+            }
+        }
+        (_, "host") => {
+            if en {
+                "Host network mode.".into()
+            } else {
+                "Mode host network.".into()
+            }
+        }
+        (_, "public") => {
+            if en {
+                format!("Published on port {port}.")
+            } else {
+                format!("Dipublish di port {port}.")
+            }
+        }
+        (_, "not-published") => {
+            if en {
+                format!("Not published. Add -p {port}:{port} to the container.")
+            } else {
+                format!("Belum dipublish. Tambahkan -p {port}:{port} ke container.")
+            }
+        }
+        (_, remapped) if remapped.starts_with("remapped:") => {
+            let host = &remapped["remapped:".len()..];
+            if en {
+                format!(
+                    "Published on host port {host}; other mail servers and clients expect {port}."
+                )
+            } else {
+                format!(
+                    "Dipublish di port host {host}; server email lain dan client mengharapkan {port}."
+                )
+            }
+        }
+        ("outbound_25", "blocked") => {
+            if en {
+                "Blocked: this server cannot reach other mail servers. Ask your VPS provider to unblock outbound port 25, or relay through a smart host.".into()
+            } else {
+                "Diblokir: server ini tidak bisa menghubungi mail server lain. Minta provider VPS membuka port 25 keluar, atau kirim lewat relay (smart host).".into()
+            }
+        }
+        ("outbound_25", banner) => {
+            if en {
+                format!("Open Â· {banner}")
+            } else {
+                format!("Terbuka Â· {banner}")
+            }
+        }
+        ("ptr", "missing") => {
+            if en {
+                format!("No PTR. Set it to {hostname} in the VPS panel.")
+            } else {
+                format!("Belum ada PTR. Atur menjadi {hostname} di panel VPS.")
+            }
+        }
+        ("ptr", "no-ip") => {
+            if en {
+                "The server's public IP is unknown.".into()
+            } else {
+                "IP publik server tidak diketahui.".into()
+            }
+        }
+        ("ptr", found) if !ok => {
+            if en {
+                format!("PTR is {found}; set it to {hostname} in the VPS panel.")
+            } else {
+                format!("PTR = {found}; atur menjadi {hostname} di panel VPS.")
+            }
+        }
+        ("https", _) => match (ok, en) {
+            (true, true) => "Answering on port 443.".into(),
+            (true, false) => "Menjawab di port 443.".into(),
+            (false, true) => "Not answering yet; it starts after the wizard and a restart.".into(),
+            (false, false) => "Belum menjawab; aktif setelah wizard dan restart.".into(),
+        },
+        ("certificate", issuer) if ok => {
+            if en {
+                format!("Valid, issued by {issuer}.")
+            } else {
+                format!("Valid, diterbitkan oleh {issuer}.")
+            }
+        }
+        ("certificate", error) => {
+            if en {
+                format!(
+                    "Not valid yet ({error}). Every name needed before the restart must point here and port 443 must be open; Stalwart retries automatically."
+                )
+            } else {
+                format!(
+                    "Belum valid ({error}). Semua nama yang wajib sebelum restart harus mengarah ke sini dan port 443 terbuka; Stalwart mencoba ulang otomatis."
+                )
+            }
+        }
+        (_, detail) => detail.into(),
+    }
+}
+
+/// A DNS record's check result, in plain words.
+pub fn stalwart_dns_detail(lang: Language, ok: bool, detail: &str) -> String {
+    let en = lang == Language::English;
+    match detail {
+        _ if ok => format!("OK Â· {detail}"),
+        "missing" => {
+            if en {
+                "Not found yet.".into()
+            } else {
+                "Belum ditemukan.".into()
+            }
+        }
+        "proxied" => {
+            if en {
+                "Proxied (orange cloud): switch it to DNS only.".into()
+            } else {
+                "Proxied (awan oranye): ubah menjadi DNS only.".into()
+            }
+        }
+        "duplicate" => {
+            if en {
+                "More than one record of this kind: keep only one.".into()
+            } else {
+                "Ada lebih dari satu record jenis ini: sisakan satu.".into()
+            }
+        }
+        _ if detail.starts_with("unauthorized:") => {
+            let found = &detail["unauthorized:".len()..];
+            if en {
+                format!("Found {found}, which does not allow this server to send. Replace it.")
+            } else {
+                format!(
+                    "Ditemukan {found}, yang tidak mengizinkan server ini mengirim. Ganti record ini."
+                )
+            }
+        }
+        found => {
+            if en {
+                format!("Found: {found}")
+            } else {
+                format!("Ditemukan: {found}")
+            }
+        }
+    }
+}
+
+pub fn stalwart_export_saved(lang: Language, path: &str) -> String {
+    match lang {
+        Language::English => format!("Saved to {path}."),
+        Language::Indonesian => format!("Tersimpan di {path}."),
+    }
+}
+
+/// An existing record to delete in Cloudflare before importing, since an
+/// import only adds records.
+pub fn stalwart_remove_record(lang: Language, kind: &str, name: &str, value: &str) -> String {
+    match lang {
+        Language::English => format!("Delete {kind} {name} -> {value}"),
+        Language::Indonesian => format!("Hapus {kind} {name} -> {value}"),
+    }
+}
+
+/// Date and time in the server's zone ("29 Oct 14:20 (UTC+7)") when `utc_offset`
+/// (seconds east of UTC, as the server reported it) is known; relative time
+/// ("Just now", "12 min ago", "3h 20m ago") when unknown or live.
+pub fn time_ago(lang: Language, seconds: u64, utc_offset: Option<i64>) -> String {
+    if let Some(offset) = utc_offset {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        return server_date(lang, now - seconds as i64, offset);
+    }
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60);
+    match lang {
+        Language::English => match seconds {
+            0..60 => "Just now".into(),
+            60..3_600 => format!("{minutes} min ago"),
+            3_600..86_400 if minutes == 0 => format!("{hours}h ago"),
+            3_600..86_400 => format!("{hours}h {minutes}m ago"),
+            _ => format!("{days}d {hours}h ago"),
+        },
+        Language::Indonesian => match seconds {
+            0..60 => "Baru saja".into(),
+            60..3_600 => format!("{minutes} menit lalu"),
+            3_600..86_400 if minutes == 0 => format!("{hours} jam lalu"),
+            3_600..86_400 => format!("{hours} jam {minutes} menit lalu"),
+            _ => format!("{days} hari {hours} jam lalu"),
+        },
+    }
+}
+
+/// `epoch` as "29 Oct 14:20 (UTC+7)" in the zone `offset` seconds east of UTC.
+fn server_date(lang: Language, epoch: i64, offset: i64) -> String {
+    const EN: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const ID: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+    ];
+    let local = epoch + offset;
+    let (day_number, second) = (local.div_euclid(86_400), local.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = day_number + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as usize;
+    let months = match lang {
+        Language::English => EN,
+        Language::Indonesian => ID,
+    };
+    let zone = match (offset / 3_600, offset.abs() / 60 % 60) {
+        (0, 0) => "UTC".to_string(),
+        (h, 0) => format!("UTC{h:+}"),
+        (h, m) => format!(
+            "UTC{}{}:{m:02}",
+            if offset < 0 { '-' } else { '+' },
+            h.abs()
+        ),
+    };
+    format!(
+        "{day} {} {:02}:{:02} ({zone})",
+        months[month - 1],
+        second / 3_600,
+        second / 60 % 60
+    )
+}
+
+pub fn archive_stats(lang: Language, avg: f64, peak: f64) -> String {
+    match lang {
+        Language::English => format!("avg {avg:.1}% Â· peak {peak:.1}%"),
+        Language::Indonesian => format!("rata-rata {avg:.1}% Â· puncak {peak:.1}%"),
+    }
+}
+
+pub fn archive_since(lang: Language, ago: &str) -> String {
+    match lang {
+        Language::English => format!("Data in this range starts {ago}."),
+        Language::Indonesian => format!("Data pada rentang ini mulai {ago}."),
+    }
+}
+
+pub fn archive_retention(lang: Language, days: u64) -> String {
+    match lang {
+        Language::English => format!(
+            "sysstat on this server keeps {days} days of data; older samples are not available."
+        ),
+        Language::Indonesian => format!(
+            "sysstat di server ini menyimpan data {days} hari; sampel yang lebih lama tidak tersedia."
+        ),
+    }
+}
+
+pub fn sysstat_confirm_desc(
+    lang: Language,
+    host: &str,
+    user: &str,
+    address: &str,
+    port: u16,
+) -> String {
+    match lang {
+        Language::English => format!(
+            "{host} Â· {user}@{address}:{port}. Installs the sysstat package from the server's configured repository (if missing), turns on its 10-minute CPU/RAM collection, sets data retention to at least 31 days, and enables the sysstat service. Needs sudo.",
+        ),
+        Language::Indonesian => format!(
+            "{host} Â· {user}@{address}:{port}. Memasang paket sysstat dari repository server (jika belum ada), menyalakan pencatatan CPU/RAM setiap 10 menit, mengatur retensi data minimal 31 hari, dan mengaktifkan service sysstat. Membutuhkan sudo.",
+        ),
     }
 }
 
@@ -1294,15 +2367,23 @@ pub fn firewall_rules_heading(lang: Language, engine: &str) -> String {
 
 pub fn maintenance_running(lang: Language, task: &str) -> String {
     match lang {
-        Language::English => format!("{task} is running. Status reloads once the operation finishes."),
-        Language::Indonesian => format!("{task} berjalan. Status akan dimuat ulang setelah operasi selesai."),
+        Language::English => {
+            format!("{task} is running. Status reloads once the operation finishes.")
+        }
+        Language::Indonesian => {
+            format!("{task} berjalan. Status akan dimuat ulang setelah operasi selesai.")
+        }
     }
 }
 
 pub fn inventory_summary(lang: Language, manager: &str, count: usize) -> String {
     match lang {
-        Language::English => format!("{manager} · {count} installed package(s) · status from the last check"),
-        Language::Indonesian => format!("{manager} · {count} paket terpasang · status dari pemeriksaan terakhir"),
+        Language::English => {
+            format!("{manager} · {count} installed package(s) · status from the last check")
+        }
+        Language::Indonesian => {
+            format!("{manager} · {count} paket terpasang · status dari pemeriksaan terakhir")
+        }
     }
 }
 
@@ -1315,8 +2396,12 @@ pub fn matching_packages(lang: Language, count: usize) -> String {
 
 pub fn install_desc_with_candidates(lang: Language, manager: &str, candidates: &str) -> String {
     match lang {
-        Language::English => format!("The package is installed from a repository already configured on the server ({manager} · package candidate(s): {candidates}). No extra repository is added automatically."),
-        Language::Indonesian => format!("Paket dipasang dari repository yang sudah dikonfigurasi pada server ({manager} · kandidat paket: {candidates}). Repository tambahan tidak dibuat otomatis."),
+        Language::English => format!(
+            "The package is installed from a repository already configured on the server ({manager} · package candidate(s): {candidates}). No extra repository is added automatically."
+        ),
+        Language::Indonesian => format!(
+            "Paket dipasang dari repository yang sudah dikonfigurasi pada server ({manager} · kandidat paket: {candidates}). Repository tambahan tidak dibuat otomatis."
+        ),
     }
 }
 
@@ -1348,17 +2433,31 @@ pub fn non_utf8_skipped(lang: Language, count: usize) -> String {
     }
 }
 
-pub fn entry_detail(lang: Language, permissions: &str, size: &str, modified: &str, target: &str) -> String {
+pub fn entry_detail(
+    lang: Language,
+    permissions: &str,
+    size: &str,
+    modified: &str,
+    target: &str,
+) -> String {
     match lang {
-        Language::English => format!("{permissions} · {size}\nModified: {modified}\nTarget: {target}"),
-        Language::Indonesian => format!("{permissions} · {size}\nUbah: {modified}\nTarget: {target}"),
+        Language::English => {
+            format!("{permissions} · {size}\nModified: {modified}\nTarget: {target}")
+        }
+        Language::Indonesian => {
+            format!("{permissions} · {size}\nUbah: {modified}\nTarget: {target}")
+        }
     }
 }
 
 pub fn discard_draft_desc(lang: Language, path: &str) -> String {
     match lang {
-        Language::English => format!("A successful read will replace the current draft. Copy or save the draft first if you still need it.\n{path}"),
-        Language::Indonesian => format!("Pembacaan yang berhasil akan mengganti draft saat ini. Salin atau simpan draft terlebih dahulu jika masih diperlukan.\n{path}"),
+        Language::English => format!(
+            "A successful read will replace the current draft. Copy or save the draft first if you still need it.\n{path}"
+        ),
+        Language::Indonesian => format!(
+            "Pembacaan yang berhasil akan mengganti draft saat ini. Salin atau simpan draft terlebih dahulu jika masih diperlukan.\n{path}"
+        ),
     }
 }
 
@@ -1371,29 +2470,45 @@ pub fn byte_count(lang: Language, bytes: usize) -> String {
 
 pub fn git_push_desc(lang: Language, host: &str, path: &str) -> String {
     match lang {
-        Language::English => format!("Sends the current branch's commits from this repository on {host} to its remote. Anyone using that repository will see them. Output appears in the terminal panel.\n\n{path}"),
-        Language::Indonesian => format!("Mengirim commit dari branch aktif repository ini di {host} ke remote-nya. Siapa pun yang memakai repository tersebut akan melihatnya. Output tampil di panel terminal.\n\n{path}"),
+        Language::English => format!(
+            "Sends the current branch's commits from this repository on {host} to its remote. Anyone using that repository will see them. Output appears in the terminal panel.\n\n{path}"
+        ),
+        Language::Indonesian => format!(
+            "Mengirim commit dari branch aktif repository ini di {host} ke remote-nya. Siapa pun yang memakai repository tersebut akan melihatnya. Output tampil di panel terminal.\n\n{path}"
+        ),
     }
 }
 
 pub fn compose_setup_desc(lang: Language, host: &str, user: &str, command: &str) -> String {
     match lang {
-        Language::English => format!("The SSH account \"{user}\" can't use Docker on {host} yet. This one-time step adds \"{user}\" to the docker group (sudo usermod -aG docker {user}), then runs the command right away — later runs skip this step. If sudo asks for a password, type it in the terminal panel.\n\nNote: members of the docker group effectively have root access to this server.\n\n{command}"),
-        Language::Indonesian => format!("Akun SSH \"{user}\" belum bisa memakai Docker di {host}. Langkah sekali saja ini menambahkan \"{user}\" ke grup docker (sudo usermod -aG docker {user}), lalu langsung menjalankan perintahnya — berikutnya langkah ini dilewati. Jika sudo meminta password, ketik di panel terminal.\n\nCatatan: anggota grup docker praktis memiliki akses root ke server ini.\n\n{command}"),
+        Language::English => format!(
+            "The SSH account \"{user}\" can't use Docker on {host} yet. This one-time step adds \"{user}\" to the docker group (sudo usermod -aG docker {user}), then runs the command right away — later runs skip this step. If sudo asks for a password, type it in the terminal panel.\n\nNote: members of the docker group effectively have root access to this server.\n\n{command}"
+        ),
+        Language::Indonesian => format!(
+            "Akun SSH \"{user}\" belum bisa memakai Docker di {host}. Langkah sekali saja ini menambahkan \"{user}\" ke grup docker (sudo usermod -aG docker {user}), lalu langsung menjalankan perintahnya — berikutnya langkah ini dilewati. Jika sudo meminta password, ketik di panel terminal.\n\nCatatan: anggota grup docker praktis memiliki akses root ke server ini.\n\n{command}"
+        ),
     }
 }
 
 pub fn explorer_target_tooltip(lang: Language, folder: &str) -> String {
     match lang {
-        Language::English => format!("New files, folders, imports and clones go into:\n{folder}\nClick a folder in the tree to change it; click here to go back to the root."),
-        Language::Indonesian => format!("File, folder, impor, dan clone baru masuk ke:\n{folder}\nKlik folder di tree untuk mengganti; klik di sini untuk kembali ke root."),
+        Language::English => format!(
+            "New files, folders, imports and clones go into:\n{folder}\nClick a folder in the tree to change it; click here to go back to the root."
+        ),
+        Language::Indonesian => format!(
+            "File, folder, impor, dan clone baru masuk ke:\n{folder}\nKlik folder di tree untuk mengganti; klik di sini untuk kembali ke root."
+        ),
     }
 }
 
 pub fn compose_up_desc(lang: Language, host: &str, command: &str) -> String {
     match lang {
-        Language::English => format!("Builds the images and starts the services in the background on {host}. Containers that changed are recreated, which briefly interrupts them. The output appears in the terminal panel.\n\n{command}"),
-        Language::Indonesian => format!("Membangun image lalu menjalankan service di background pada {host}. Container yang berubah akan dibuat ulang sehingga sempat terhenti sebentar. Output tampil di panel terminal.\n\n{command}"),
+        Language::English => format!(
+            "Builds the images and starts the services in the background on {host}. Containers that changed are recreated, which briefly interrupts them. The output appears in the terminal panel.\n\n{command}"
+        ),
+        Language::Indonesian => format!(
+            "Membangun image lalu menjalankan service di background pada {host}. Container yang berubah akan dibuat ulang sehingga sempat terhenti sebentar. Output tampil di panel terminal.\n\n{command}"
+        ),
     }
 }
 
@@ -1402,26 +2517,47 @@ pub fn db_sql_rows(lang: Language, count: usize, truncated: bool) -> String {
         (Language::English, false) => format!("{count} row(s)"),
         (Language::English, true) => format!("First {count} rows shown (result was larger)"),
         (Language::Indonesian, false) => format!("{count} baris"),
-        (Language::Indonesian, true) => format!("Menampilkan {count} baris pertama (hasil lebih banyak)"),
+        (Language::Indonesian, true) => {
+            format!("Menampilkan {count} baris pertama (hasil lebih banyak)")
+        }
     }
 }
 
-pub fn db_sql_confirm_desc(lang: Language, host: &str, container: &str, db: Option<&str>, destructive: bool, sql: &str) -> String {
+pub fn db_sql_confirm_desc(
+    lang: Language,
+    host: &str,
+    container: &str,
+    db: Option<&str>,
+    destructive: bool,
+    sql: &str,
+) -> String {
     let db = db.unwrap_or("-");
     match lang {
         Language::English => format!(
             "Host: {host}\nContainer: {container} · database: {db}\n{}\n\n{sql}",
-            if destructive { "This deletes or alters data or structure and cannot be undone. Make a backup first if unsure." } else { "This changes data or structure in the database." },
+            if destructive {
+                "This deletes or alters data or structure and cannot be undone. Make a backup first if unsure."
+            } else {
+                "This changes data or structure in the database."
+            },
         ),
         Language::Indonesian => format!(
             "Host: {host}\nContainer: {container} · database: {db}\n{}\n\n{sql}",
-            if destructive { "Query ini menghapus atau mengubah data/struktur dan tidak bisa dibatalkan. Buat backup dulu jika ragu." } else { "Query ini mengubah data atau struktur database." },
+            if destructive {
+                "Query ini menghapus atau mengubah data/struktur dan tidak bisa dibatalkan. Buat backup dulu jika ragu."
+            } else {
+                "Query ini mengubah data atau struktur database."
+            },
         ),
     }
 }
 
 pub fn db_browser_range(lang: Language, offset: usize, count: usize) -> String {
-    let (first, last) = if count == 0 { (offset, offset) } else { (offset + 1, offset + count) };
+    let (first, last) = if count == 0 {
+        (offset, offset)
+    } else {
+        (offset + 1, offset + count)
+    };
     match lang {
         Language::English => format!("Rows {first}–{last}"),
         Language::Indonesian => format!("Baris {first}–{last}"),
@@ -1453,12 +2589,139 @@ pub fn docker_confirm_title(lang: Language, action: &crate::docker::Action) -> S
     use crate::docker::Action;
     let english = lang == Language::English;
     match action {
-        Action::Restart(name) => if english { format!("Are you sure you want to restart {name}?") } else { format!("Yakin ingin me-restart {name}?") },
-        Action::Stop(name) => if english { format!("Are you sure you want to stop {name}?") } else { format!("Yakin ingin menghentikan {name}?") },
-        Action::ComposeDown(project) => if english { format!("Are you sure you want to take {} down?", project.name) } else { format!("Yakin ingin menjalankan down pada {}?", project.name) },
-        Action::ComposeUp { service: Some(service), .. } => if english { format!("Are you sure you want to rebuild {service}?") } else { format!("Yakin ingin me-rebuild {service}?") },
-        Action::ComposeUp { project, service: None } => if english { format!("Are you sure you want to rebuild {}?", project.name) } else { format!("Yakin ingin me-rebuild {}?", project.name) },
-        _ => if english { "Are you sure?".into() } else { "Apakah Anda yakin?".into() },
+        Action::Restart(name) => {
+            if english {
+                format!("Are you sure you want to restart {name}?")
+            } else {
+                format!("Yakin ingin me-restart {name}?")
+            }
+        }
+        Action::Stop(name) => {
+            if english {
+                format!("Are you sure you want to stop {name}?")
+            } else {
+                format!("Yakin ingin menghentikan {name}?")
+            }
+        }
+        Action::ComposeDown(project) => {
+            if english {
+                format!("Are you sure you want to take {} down?", project.name)
+            } else {
+                format!("Yakin ingin menjalankan down pada {}?", project.name)
+            }
+        }
+        Action::ComposeUp {
+            service: Some(service),
+            ..
+        } => {
+            if english {
+                format!("Are you sure you want to rebuild {service}?")
+            } else {
+                format!("Yakin ingin me-rebuild {service}?")
+            }
+        }
+        Action::ComposeUp {
+            project,
+            service: None,
+        } => {
+            if english {
+                format!("Are you sure you want to rebuild {}?", project.name)
+            } else {
+                format!("Yakin ingin me-rebuild {}?", project.name)
+            }
+        }
+        Action::ImageRemove(image) => {
+            if english {
+                format!("Delete image {image}?")
+            } else {
+                format!("Hapus image {image}?")
+            }
+        }
+        Action::ImagePrune { all: false } => {
+            if english {
+                "Remove all untagged images?".into()
+            } else {
+                "Hapus semua image tanpa tag?".into()
+            }
+        }
+        Action::ImagePrune { all: true } => {
+            if english {
+                "Remove every unused image?".into()
+            } else {
+                "Hapus semua image yang tidak dipakai?".into()
+            }
+        }
+        Action::ContainerRemove(name) => {
+            if english {
+                format!("Delete container {name}?")
+            } else {
+                format!("Hapus container {name}?")
+            }
+        }
+        Action::VolumeRemove(name) => {
+            if english {
+                format!("Delete volume {name} and its data?")
+            } else {
+                format!("Hapus volume {name} beserta datanya?")
+            }
+        }
+        Action::VolumePrune => {
+            if english {
+                "Remove unused volumes and their data?".into()
+            } else {
+                "Hapus volume tak terpakai beserta datanya?".into()
+            }
+        }
+        _ => {
+            if english {
+                "Are you sure?".into()
+            } else {
+                "Apakah Anda yakin?".into()
+            }
+        }
+    }
+}
+
+/// "Containers: a, b" for an image or volume in use.
+pub fn docker_used_by(lang: Language, containers: &[String]) -> String {
+    let names = containers.join(", ");
+    match lang {
+        Language::English => format!("Used by: {names}"),
+        Language::Indonesian => format!("Dipakai oleh: {names}"),
+    }
+}
+
+/// Why Delete is off for an image or volume a container still uses.
+pub fn docker_in_use_delete(lang: Language, containers: &[String]) -> String {
+    let names = containers.join(", ");
+    match lang {
+        Language::English => format!("In use by {names}. Remove those containers first."),
+        Language::Indonesian => {
+            format!("Dipakai oleh {names}. Hapus container tersebut terlebih dahulu.")
+        }
+    }
+}
+
+/// One `docker system df` row: count, size, and what pruning would free.
+pub fn docker_disk_usage(lang: Language, usage: &crate::docker::DiskUsage) -> String {
+    match lang {
+        Language::English => format!(
+            "{} total ({} in use) Â· {} on disk Â· {} reclaimable",
+            usage.total, usage.active, usage.size, usage.reclaimable
+        ),
+        Language::Indonesian => format!(
+            "{} total ({} dipakai) Â· {} di disk Â· {} dapat dibebaskan",
+            usage.total, usage.active, usage.size, usage.reclaimable
+        ),
+    }
+}
+
+pub fn docker_resource_count(lang: Language, shown: usize, total: usize) -> String {
+    match (lang, shown == total) {
+        (Language::English, true) => format!("{total} item(s)"),
+        (Language::English, false) => format!("{shown} of {total}"),
+        (Language::Indonesian, true) => format!("{total} item"),
+        (Language::Indonesian, false) => format!("{shown} dari {total}"),
     }
 }
 
@@ -1466,12 +2729,60 @@ pub fn docker_confirm_desc(lang: Language, host: &str, action: &crate::docker::A
     use crate::docker::Action;
     let command = action.title();
     let effect = match (lang, action) {
-        (Language::English, Action::Stop(_)) => "The container stops and its service stays offline until you start it again.",
-        (Language::English, Action::ComposeDown(_)) => "The project's containers and networks are stopped and removed, so the site/service goes offline; named volumes (database data) are kept. Start it again with Rebuild & up.",
-        (Language::English, _) => "The service is briefly interrupted while its container restarts or is recreated.",
-        (Language::Indonesian, Action::Stop(_)) => "Container dihentikan dan service-nya offline sampai Anda menjalankannya lagi.",
-        (Language::Indonesian, Action::ComposeDown(_)) => "Container dan network project dihentikan lalu dihapus sehingga situs/service offline; named volume (data database) tetap disimpan. Jalankan lagi dengan Rebuild & up.",
-        (Language::Indonesian, _) => "Service sempat terhenti sebentar selama container di-restart atau dibuat ulang.",
+        (Language::English, Action::Stop(_)) => {
+            "The container stops and its service stays offline until you start it again."
+        }
+        (Language::English, Action::ComposeDown(_)) => {
+            "The project's containers and networks are stopped and removed, so the site/service goes offline; named volumes (database data) are kept. Start it again with Rebuild & up."
+        }
+        (Language::English, Action::ImageRemove(_)) => {
+            "The image is deleted from this server (if it has other tags, only this tag is removed). It can be pulled again later; containers keep running."
+        }
+        (Language::English, Action::ImagePrune { all: false }) => {
+            "Untagged (dangling) images, usually left over from rebuilds, are deleted. Images that containers use are kept."
+        }
+        (Language::English, Action::ImagePrune { all: true }) => {
+            "Every image that no container (running or stopped) uses is deleted, including tagged ones. They have to be pulled or built again before their next use."
+        }
+        (Language::English, Action::ContainerRemove(_)) => {
+            "The container is permanently deleted. Its image and volume data are kept; it can be recreated again."
+        }
+        (Language::English, Action::VolumeRemove(_)) => {
+            "The volume and ALL data in it (e.g. database files) are permanently deleted. This cannot be undone; back the data up first if you still need it."
+        }
+        (Language::English, Action::VolumePrune) => {
+            "Volumes that no container uses are permanently deleted together with their data. On Docker 23+ only anonymous volumes are removed; named volumes are kept."
+        }
+        (Language::English, _) => {
+            "The service is briefly interrupted while its container restarts or is recreated."
+        }
+        (Language::Indonesian, Action::Stop(_)) => {
+            "Container dihentikan dan service-nya offline sampai Anda menjalankannya lagi."
+        }
+        (Language::Indonesian, Action::ComposeDown(_)) => {
+            "Container dan network project dihentikan lalu dihapus sehingga situs/service offline; named volume (data database) tetap disimpan. Jalankan lagi dengan Rebuild & up."
+        }
+        (Language::Indonesian, Action::ImageRemove(_)) => {
+            "Image dihapus dari server ini (jika punya tag lain, hanya tag ini yang dilepas). Image bisa di-pull lagi nanti; container tetap berjalan."
+        }
+        (Language::Indonesian, Action::ImagePrune { all: false }) => {
+            "Image tanpa tag (dangling), biasanya sisa rebuild, dihapus. Image yang dipakai container tetap disimpan."
+        }
+        (Language::Indonesian, Action::ImagePrune { all: true }) => {
+            "Semua image yang tidak dipakai container mana pun (berjalan maupun berhenti) dihapus, termasuk yang bertag. Image harus di-pull atau di-build lagi sebelum dipakai."
+        }
+        (Language::Indonesian, Action::ContainerRemove(_)) => {
+            "Container dihapus permanen. Image dan data volume tetap disimpan; container dapat dibuat ulang kapan saja."
+        }
+        (Language::Indonesian, Action::VolumeRemove(_)) => {
+            "Volume beserta SELURUH datanya (mis. file database) dihapus permanen dan tidak dapat dikembalikan. Backup datanya dulu jika masih diperlukan."
+        }
+        (Language::Indonesian, Action::VolumePrune) => {
+            "Volume yang tidak dipakai container mana pun dihapus permanen beserta datanya. Pada Docker 23+ hanya volume anonim yang dihapus; named volume tetap disimpan."
+        }
+        (Language::Indonesian, _) => {
+            "Service sempat terhenti sebentar selama container di-restart atau dibuat ulang."
+        }
     };
     match lang {
         Language::English => format!("Target host: {host}\n{effect}\n\n{command}"),
@@ -1482,7 +2793,9 @@ pub fn docker_confirm_desc(lang: Language, host: &str, action: &crate::docker::A
 pub fn docker_usage_total(lang: Language, cpu: f32, capacity: u32, memory: &str) -> String {
     match lang {
         Language::English => format!("Total running: CPU {cpu:.1}% of {capacity}% · RAM {memory}"),
-        Language::Indonesian => format!("Total berjalan: CPU {cpu:.1}% dari {capacity}% · RAM {memory}"),
+        Language::Indonesian => {
+            format!("Total berjalan: CPU {cpu:.1}% dari {capacity}% · RAM {memory}")
+        }
     }
 }
 
@@ -1537,8 +2850,12 @@ pub fn git_connected_as(lang: Language, provider: &str, user: &str) -> String {
 
 pub fn git_compare_fingerprint(lang: Language, provider: &str) -> String {
     match lang {
-        Language::English => format!("Before trusting, check this SHA256 fingerprint matches the one {provider} publishes in its documentation:"),
-        Language::Indonesian => format!("Sebelum mempercayai, pastikan fingerprint SHA256 ini sama dengan yang dipublikasikan {provider} di dokumentasinya:"),
+        Language::English => format!(
+            "Before trusting, check this SHA256 fingerprint matches the one {provider} publishes in its documentation:"
+        ),
+        Language::Indonesian => format!(
+            "Sebelum mempercayai, pastikan fingerprint SHA256 ini sama dengan yang dipublikasikan {provider} di dokumentasinya:"
+        ),
     }
 }
 
@@ -1554,17 +2871,64 @@ pub fn git_add_key_hint(lang: Language, provider: crate::git_auth::Provider) -> 
 
 pub fn git_denied(lang: Language, provider: &str) -> String {
     match lang {
-        Language::English => format!("{provider} rejected this server's key. Add the public key above to your account, then test again."),
-        Language::Indonesian => format!("{provider} menolak key server ini. Tambahkan public key di atas ke akun Anda, lalu uji lagi."),
+        Language::English => format!(
+            "{provider} rejected this server's key. Add the public key above to your account, then test again."
+        ),
+        Language::Indonesian => format!(
+            "{provider} menolak key server ini. Tambahkan public key di atas ke akun Anda, lalu uji lagi."
+        ),
     }
 }
 
 pub fn fs_delete_desc(lang: Language, path: &str, is_dir: bool) -> String {
     match (lang, is_dir) {
-        (Language::English, true) => format!("This cannot be undone. The folder is deleted along with everything inside it.\n{path}"),
+        (Language::English, true) => format!(
+            "This cannot be undone. The folder is deleted along with everything inside it.\n{path}"
+        ),
         (Language::English, false) => format!("This cannot be undone.\n{path}"),
-        (Language::Indonesian, true) => format!("Tindakan ini tidak dapat dibatalkan. Folder akan dihapus beserta seluruh isinya.\n{path}"),
+        (Language::Indonesian, true) => format!(
+            "Tindakan ini tidak dapat dibatalkan. Folder akan dihapus beserta seluruh isinya.\n{path}"
+        ),
         (Language::Indonesian, false) => format!("Tindakan ini tidak dapat dibatalkan.\n{path}"),
+    }
+}
+
+pub fn fs_delete_sudo_desc(
+    lang: Language,
+    path: &str,
+    owner: &str,
+    user: &str,
+    is_dir: bool,
+) -> String {
+    let item = if is_dir {
+        match lang {
+            Language::English => "folder",
+            Language::Indonesian => "Folder",
+        }
+    } else {
+        match lang {
+            Language::English => "file",
+            Language::Indonesian => "File",
+        }
+    };
+    match lang {
+        Language::English => format!(
+            "{item} is owned by '{owner}', but you are connected as user '{user}'.\n\nThere is no permission to delete it normally. Do you want to delete it using sudo rm?\n\n{path}"
+        ),
+        Language::Indonesian => format!(
+            "{item} ini dimiliki oleh '{owner}', sedangkan kamu terhubung sebagai user '{user}'.\n\nTidak ada izin menghapus secara biasa. Apakah ingin menghapusnya dengan sudo rm?\n\n{path}"
+        ),
+    }
+}
+
+pub fn fs_delete_sudo_terminal_desc(lang: Language, path: &str) -> String {
+    match lang {
+        Language::English => format!(
+            "The server requires a password for sudo. Open Terminal to run the delete command so you can type your password?\n\n{path}"
+        ),
+        Language::Indonesian => format!(
+            "Server meminta password untuk sudo. Buka Terminal untuk menjalankan perintah hapus agar kamu dapat mengetikkan password?\n\n{path}"
+        ),
     }
 }
 
@@ -1576,22 +2940,55 @@ pub fn fs_success_message(lang: Language, reply: &crate::remote_fs::Reply) -> St
         (Language::English, Reply::Deleted { path }) => format!("Deleted: {path}"),
         (Language::Indonesian, Reply::Deleted { path }) => format!("Dihapus: {path}"),
         (Language::English, Reply::Renamed { from, to }) => format!("Renamed/moved: {from} → {to}"),
-        (Language::Indonesian, Reply::Renamed { from, to }) => format!("Diganti nama/dipindahkan: {from} → {to}"),
+        (Language::Indonesian, Reply::Renamed { from, to }) => {
+            format!("Diganti nama/dipindahkan: {from} → {to}")
+        }
         (Language::English, Reply::Copied { to }) => format!("Copied to: {to}"),
         (Language::Indonesian, Reply::Copied { to }) => format!("Disalin ke: {to}"),
         (Language::English, Reply::Uploaded { path }) => format!("Uploaded: {path}"),
         (Language::Indonesian, Reply::Uploaded { path }) => format!("Diunggah: {path}"),
-        (Language::English, Reply::Chmoded { path, mode, recursive }) => format!("Permissions set to {mode:03o}{}: {path}", if *recursive { " (including contents)" } else { "" }),
-        (Language::Indonesian, Reply::Chmoded { path, mode, recursive }) => format!("Izin diubah ke {mode:03o}{}: {path}", if *recursive { " (termasuk isinya)" } else { "" }),
+        (
+            Language::English,
+            Reply::Chmoded {
+                path,
+                mode,
+                recursive,
+            },
+        ) => format!(
+            "Permissions set to {mode:03o}{}: {path}",
+            if *recursive {
+                " (including contents)"
+            } else {
+                ""
+            }
+        ),
+        (
+            Language::Indonesian,
+            Reply::Chmoded {
+                path,
+                mode,
+                recursive,
+            },
+        ) => format!(
+            "Izin diubah ke {mode:03o}{}: {path}",
+            if *recursive { " (termasuk isinya)" } else { "" }
+        ),
+        (Language::English, Reply::Stat(info)) => format!("Properties: {}", info.path),
+        (Language::Indonesian, Reply::Stat(info)) => format!("Informasi: {}", info.path),
     }
 }
 
 pub fn import_started(lang: Language, total: usize, skipped: usize) -> String {
     match (lang, skipped) {
         (Language::English, 0) => format!("Importing {total} item(s)..."),
-        (Language::English, skipped) => format!("Importing {total} item(s)... ({skipped} local entr{suffix} skipped)", suffix = if skipped == 1 { "y" } else { "ies" }),
+        (Language::English, skipped) => format!(
+            "Importing {total} item(s)... ({skipped} local entr{suffix} skipped)",
+            suffix = if skipped == 1 { "y" } else { "ies" }
+        ),
         (Language::Indonesian, 0) => format!("Mengimpor {total} item..."),
-        (Language::Indonesian, skipped) => format!("Mengimpor {total} item... ({skipped} entri lokal dilewati)"),
+        (Language::Indonesian, skipped) => {
+            format!("Mengimpor {total} item... ({skipped} entri lokal dilewati)")
+        }
     }
 }
 
@@ -1604,8 +3001,17 @@ pub fn import_summary(lang: Language, done: usize, failed: usize) -> String {
     }
 }
 
-pub fn power_confirm_desc(lang: Language, host: &str, user: &str, address: &str, port: u16) -> String {
-    format!("{host} · {user}@{address}:{port}. {}", strings(lang).confirm_power_desc_tail)
+pub fn power_confirm_desc(
+    lang: Language,
+    host: &str,
+    user: &str,
+    address: &str,
+    port: u16,
+) -> String {
+    format!(
+        "{host} · {user}@{address}:{port}. {}",
+        strings(lang).confirm_power_desc_tail
+    )
 }
 
 pub fn power_action_notice(lang: Language, reboot: bool) -> String {
@@ -1617,7 +3023,13 @@ pub fn power_action_notice(lang: Language, reboot: bool) -> String {
     }
 }
 
-pub fn update_confirm_desc(lang: Language, host: &str, user: &str, address: &str, port: u16) -> String {
+pub fn update_confirm_desc(
+    lang: Language,
+    host: &str,
+    user: &str,
+    address: &str,
+    port: u16,
+) -> String {
     match lang {
         Language::English => format!(
             "{host} · {user}@{address}:{port}. APT: apt-get update && apt-get upgrade -y. DNF: dnf upgrade --refresh -y. Services may restart during the update; there is no distro upgrade or automatic reboot.",
@@ -1628,17 +3040,31 @@ pub fn update_confirm_desc(lang: Language, host: &str, user: &str, address: &str
     }
 }
 
-pub fn firewall_confirm_desc(lang: Language, action: &str, port: u16, protocol: &str, engine: &str) -> String {
+pub fn firewall_confirm_desc(
+    lang: Language,
+    action: &str,
+    port: u16,
+    protocol: &str,
+    engine: &str,
+) -> String {
     match lang {
-        Language::English => format!("{action} {port}/{protocol} via {engine}. UFW adds an allow/deny rule; firewalld changes the runtime port on the default zone (not persistent across reload/reboot)."),
-        Language::Indonesian => format!("{action} {port}/{protocol} lewat {engine}. UFW menambah allow/deny; firewalld mengubah port runtime pada default zone (tidak persisten setelah reload/reboot)."),
+        Language::English => format!(
+            "{action} {port}/{protocol} via {engine}. UFW adds an allow/deny rule; firewalld changes the runtime port on the default zone (not persistent across reload/reboot)."
+        ),
+        Language::Indonesian => format!(
+            "{action} {port}/{protocol} lewat {engine}. UFW menambah allow/deny; firewalld mengubah port runtime pada default zone (tidak persisten setelah reload/reboot)."
+        ),
     }
 }
 
 pub fn firewall_delete_rule_desc(lang: Language, action: &str, to: &str) -> String {
     match lang {
-        Language::English => format!("Remove the UFW rule \"{action} {to}\". This deletes that specific rule only; other rules are untouched."),
-        Language::Indonesian => format!("Hapus aturan UFW \"{action} {to}\". Hanya aturan ini yang dihapus; aturan lain tidak terpengaruh."),
+        Language::English => format!(
+            "Remove the UFW rule \"{action} {to}\". This deletes that specific rule only; other rules are untouched."
+        ),
+        Language::Indonesian => format!(
+            "Hapus aturan UFW \"{action} {to}\". Hanya aturan ini yang dihapus; aturan lain tidak terpengaruh."
+        ),
     }
 }
 
@@ -1662,16 +3088,35 @@ pub fn firewall_toggle_ok(lang: Language, enable: bool) -> &'static str {
 
 pub fn firewall_toggle_warning(lang: Language, enable: bool) -> &'static str {
     match (lang, enable) {
-        (Language::English, true) => "WARNING: if the SSH port isn't already allowed, enabling the firewall can lock you out of this connection.",
-        (Language::English, false) => "WARNING: disabling the firewall removes all of its protection immediately.",
-        (Language::Indonesian, true) => "PERINGATAN: jika port SSH belum diizinkan, mengaktifkan firewall dapat mengunci koneksi ini.",
-        (Language::Indonesian, false) => "PERINGATAN: menonaktifkan firewall langsung menghilangkan seluruh perlindungannya.",
+        (Language::English, true) => {
+            "WARNING: if the SSH port isn't already allowed, enabling the firewall can lock you out of this connection."
+        }
+        (Language::English, false) => {
+            "WARNING: disabling the firewall removes all of its protection immediately."
+        }
+        (Language::Indonesian, true) => {
+            "PERINGATAN: jika port SSH belum diizinkan, mengaktifkan firewall dapat mengunci koneksi ini."
+        }
+        (Language::Indonesian, false) => {
+            "PERINGATAN: menonaktifkan firewall langsung menghilangkan seluruh perlindungannya."
+        }
     }
 }
 
 pub fn firewall_reload_desc(lang: Language, engine: &str) -> String {
     match lang {
-        Language::English => format!("Re-reads {engine}'s saved rules and re-applies them. Running rules stay the same; this just syncs the active firewall with what's on disk."),
-        Language::Indonesian => format!("Membaca ulang aturan {engine} yang tersimpan dan menerapkannya kembali. Aturan yang berjalan tidak berubah; ini hanya menyelaraskan firewall aktif dengan yang tersimpan di disk."),
+        Language::English => format!(
+            "Re-reads {engine}'s saved rules and re-applies them. Running rules stay the same; this just syncs the active firewall with what's on disk."
+        ),
+        Language::Indonesian => format!(
+            "Membaca ulang aturan {engine} yang tersimpan dan menerapkannya kembali. Aturan yang berjalan tidak berubah; ini hanya menyelaraskan firewall aktif dengan yang tersimpan di disk."
+        ),
+    }
+}
+
+pub fn about_version(lang: Language, version: &str) -> String {
+    match lang {
+        Language::English => format!("Version {version}"),
+        Language::Indonesian => format!("Versi {version}"),
     }
 }

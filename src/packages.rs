@@ -2,28 +2,29 @@
 use anyhow::{Result, bail};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Software { Nginx, Docker, Compose, Git, Node, Redis, Postgres }
+pub enum Software { Nginx, Certbot, Docker, Compose, Git, Node, Redis, Postgres }
 
 impl Software {
-    pub const ALL: [Self; 7] = [Self::Nginx, Self::Docker, Self::Compose, Self::Git, Self::Node, Self::Redis, Self::Postgres];
+    pub const ALL: [Self; 8] = [Self::Nginx, Self::Certbot, Self::Docker, Self::Compose, Self::Git, Self::Node, Self::Redis, Self::Postgres];
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Nginx => "Nginx", Self::Docker => "Docker Engine", Self::Compose => "Docker Compose",
+            Self::Nginx => "Nginx", Self::Certbot => "Certbot", Self::Docker => "Docker Engine", Self::Compose => "Docker Compose",
             Self::Git => "Git", Self::Node => "Node.js", Self::Redis => "Redis", Self::Postgres => "PostgreSQL",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Nginx => "Web server dan reverse proxy", Self::Docker => "Engine untuk menjalankan container",
+            Self::Nginx => "Web server dan reverse proxy", Self::Certbot => "Sertifikat HTTPS Let's Encrypt untuk Nginx",
+            Self::Docker => "Engine untuk menjalankan container",
             Self::Compose => "Pengelolaan aplikasi multi-container", Self::Git => "Version control",
             Self::Node => "JavaScript runtime", Self::Redis => "Cache dan data store", Self::Postgres => "Database PostgreSQL",
         }
     }
 
     pub fn id(self) -> &'static str {
-        match self { Self::Nginx => "nginx", Self::Docker => "docker", Self::Compose => "compose", Self::Git => "git", Self::Node => "node", Self::Redis => "redis", Self::Postgres => "postgres" }
+        match self { Self::Nginx => "nginx", Self::Certbot => "certbot", Self::Docker => "docker", Self::Compose => "compose", Self::Git => "git", Self::Node => "node", Self::Redis => "redis", Self::Postgres => "postgres" }
     }
 
     pub fn candidates(self, manager: &str) -> &'static str {
@@ -36,6 +37,9 @@ impl Software {
             (Self::Redis, _) => "redis",
             (Self::Postgres, "APT") => "postgresql",
             (Self::Postgres, _) => "postgresql-server",
+            // The Nginx plugin depends on certbot itself, so one package
+            // installs both.
+            (Self::Certbot, _) => "python3-certbot-nginx",
             (Self::Nginx, _) => "nginx", (Self::Git, _) => "git", (Self::Node, _) => "nodejs",
         }
     }
@@ -57,6 +61,12 @@ pub enum Maintenance {
     Server(crate::live::Action),
     /// `git clone <url>` into `<parent>/<dir>` on the server.
     GitClone { url: String, parent: String, dir: String },
+    /// Nginx reverse proxy `domain` → `127.0.0.1:port`, optionally with a
+    /// Let's Encrypt certificate from Certbot. `email` may be empty.
+    NginxSite { domain: String, port: u16, email: String, https: bool },
+    /// Installs sysstat if missing, switches its 10-minute collection on and
+    /// keeps at least 31 days, for the Summary page's long history ranges.
+    Sysstat,
 }
 
 impl Maintenance {
@@ -68,6 +78,8 @@ impl Maintenance {
             Self::Server(action) => action.title(),
             // The URL is left out on purpose: it may embed a token.
             Self::GitClone { dir, .. } => format!("Git clone {dir}"),
+            Self::NginxSite { domain, .. } => format!("Setup Nginx {domain}"),
+            Self::Sysstat => "Setup sysstat".into(),
         }
     }
 
@@ -97,6 +109,118 @@ fi
 git clone --progress -- {url} {dir}
 printf '[Awan] Clone selesai.\n'
 "#, parent = single_quote(parent), dir = single_quote(dir), url = single_quote(url));
+                Ok(shell_command(&script))
+            }
+            Self::NginxSite { domain, port, email, https } => {
+                if !valid_domain(domain) { bail!("Domain tidak valid. Contoh: mail.example.com"); }
+                if *port == 0 { bail!("Port aplikasi harus berupa angka 1 sampai 65535"); }
+                if !email.is_empty() && !valid_email(email) { bail!("Email tidak valid"); }
+                let account = if email.is_empty() { "--register-unsafely-without-email".to_owned() } else { format!("-m {}", single_quote(email)) };
+                // Never touches a config this app did not write (first-line
+                // marker), so hand-made sites such as an existing API proxy
+                // stay as they are. Rerunning on its own config is allowed so
+                // a failed Certbot step can be retried after fixing DNS.
+                let script = format!(r#"exec </dev/null
+set -e
+as_root() {{
+    if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
+}}
+domain='{domain}'
+https={https}
+marker='# Managed by Awan Host Manager'
+tmp=
+backup=
+trap 'rm -f "$tmp" "$backup"' EXIT
+if ! command -v nginx >/dev/null 2>&1; then
+    printf '[Awan] Nginx belum terpasang. Pasang melalui katalog Applications.\n' >&2
+    exit 2
+fi
+if [ "$https" = 1 ] && ! command -v certbot >/dev/null 2>&1; then
+    printf '[Awan] Certbot belum terpasang. Pasang Certbot dari katalog Applications, lalu ulangi.\n' >&2
+    exit 2
+fi
+if [ -d /etc/nginx/sites-available ] && [ -d /etc/nginx/sites-enabled ]; then
+    conf="/etc/nginx/sites-available/$domain"
+    link="/etc/nginx/sites-enabled/$domain"
+else
+    conf="/etc/nginx/conf.d/$domain.conf"
+    link=
+fi
+if [ -e "$conf" ]; then
+    if [ "$(as_root head -n 1 "$conf")" != "$marker" ]; then
+        printf '[Awan] %s sudah ada dan tidak dibuat oleh aplikasi ini; tidak ditimpa.\n' "$conf" >&2
+        exit 3
+    fi
+    if as_root grep -q ssl_certificate "$conf"; then
+        printf '[Awan] %s sudah memakai HTTPS. Tidak ada yang diubah.\n' "$domain"
+        exit 0
+    fi
+    printf '[Awan] Memperbarui %s (belum memakai HTTPS).\n' "$conf"
+else
+    existing=$(as_root grep -rlsE '^[^#]*server_name[^;]*[[:space:]]{domain_re}([[:space:]]|;)' /etc/nginx/ || true)
+    if [ -n "$existing" ]; then
+        printf '[Awan] Domain %s sudah dipakai konfigurasi Nginx lain; tidak diubah:\n%s\n' "$domain" "$existing" >&2
+        exit 3
+    fi
+fi
+if command -v curl >/dev/null 2>&1 && ! curl -s -o /dev/null --max-time 5 'http://127.0.0.1:{port}/'; then
+    printf '[Awan] Peringatan: http://127.0.0.1:{port} tidak merespons. Pastikan aplikasi berjalan di port ini.\n'
+fi
+tmp=$(mktemp)
+cat > "$tmp" <<'AWAN_NGINX'
+# Managed by Awan Host Manager
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+
+    client_max_body_size 100m;
+
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+    }}
+}}
+AWAN_NGINX
+if [ ! -f /proc/net/if_inet6 ]; then sed -i '/listen \[::\]:80;/d' "$tmp"; fi
+if [ -e "$conf" ]; then
+    backup=$(mktemp)
+    as_root cat "$conf" > "$backup"
+fi
+as_root install -m 644 "$tmp" "$conf"
+created_link=0
+if [ -n "$link" ] && [ ! -e "$link" ]; then
+    as_root ln -s "$conf" "$link"
+    created_link=1
+fi
+if ! as_root nginx -t; then
+    printf '[Awan] Konfigurasi Nginx tidak valid; perubahan dibatalkan.\n' >&2
+    if [ -n "$backup" ]; then as_root install -m 644 "$backup" "$conf"; else as_root rm -f "$conf"; fi
+    if [ "$created_link" = 1 ]; then as_root rm -f "$link"; fi
+    exit 4
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    as_root systemctl reload-or-restart nginx
+else
+    as_root nginx -s reload
+fi
+printf '[Awan] HTTP aktif: http://%s -> 127.0.0.1:{port}\n' "$domain"
+if [ "$https" = 1 ]; then
+    printf "[Awan] Meminta sertifikat Let's Encrypt untuk %s...\n" "$domain"
+    if ! as_root certbot --nginx --non-interactive --agree-tos {account} --redirect -d "$domain"; then
+        printf '[Awan] Certbot gagal; konfigurasi HTTP tetap aktif. Pastikan DNS domain mengarah ke server ini dan port 80/443 terbuka, lalu jalankan setup lagi.\n' >&2
+        exit 5
+    fi
+    printf '[Awan] Selesai: https://%s -> 127.0.0.1:{port}\n' "$domain"
+fi
+"#, https = if *https { 1 } else { 0 }, domain_re = domain.replace('.', "\\."));
                 Ok(shell_command(&script))
             }
             Self::Install(app) => {
@@ -133,6 +257,45 @@ done
 printf '[Awan] Paket tidak tersedia di repository yang dikonfigurasi: %s\n' "$candidates" >&2
 exit 2
 "#, apt = app.candidates("APT"), dnf = app.candidates("DNF"));
+                Ok(shell_command(&script))
+            }
+            Self::Sysstat => {
+                let script = format!(r#"{SETUP}
+if installed sysstat; then
+    printf '[Awan] Paket sysstat sudah terpasang.\n'
+elif [ "$manager" = apt ]; then
+    as_root apt-get -o APT::Update::Error-Mode=any update
+    as_root apt-get install -y sysstat
+else
+    as_root dnf install -y sysstat
+fi
+# Debian/Ubuntu ship collection switched off.
+if [ -f /etc/default/sysstat ]; then
+    as_root sed -i 's/^ENABLED=.*/ENABLED="true"/' /etc/default/sysstat
+fi
+for conf in /etc/sysstat/sysstat /etc/sysconfig/sysstat; do
+    [ -f "$conf" ] || continue
+    current=$(sed -n 's/^HISTORY=["]*\([0-9][0-9]*\).*/\1/p' "$conf" | tail -n 1)
+    if [ -z "$current" ] || [ "$current" -lt 31 ]; then
+        if grep -q '^HISTORY=' "$conf"; then
+            as_root sed -i 's/^HISTORY=.*/HISTORY=31/' "$conf"
+        else
+            printf 'HISTORY=31\n' | as_root tee -a "$conf" >/dev/null
+        fi
+        printf '[Awan] Retensi data sysstat diatur ke 31 hari (%s).\n' "$conf"
+    fi
+done
+if command -v systemctl >/dev/null 2>&1; then
+    as_root systemctl enable --now sysstat
+    # Newer packages collect through timers instead of cron.
+    for unit in sysstat-collect.timer sysstat-summary.timer; do
+        if systemctl cat "$unit" >/dev/null 2>&1; then
+            as_root systemctl enable --now "$unit"
+        fi
+    done
+fi
+printf '[Awan] sysstat aktif. Sampel pertama tercatat dalam 10 menit.\n'
+"#);
                 Ok(shell_command(&script))
             }
             Self::Remove(package) => {
@@ -202,6 +365,26 @@ pub fn valid_git_url(url: &str) -> bool {
         || url.split_once(':').is_some_and(|(host, path)| host.contains('@') && !host.contains('/') && !path.is_empty())
 }
 
+/// A lowercase DNS name with at least two labels, e.g. `mail.example.com`.
+/// Rejects IP addresses (Let's Encrypt does not issue for them) and
+/// wildcards, so the value is safe in both shell and Nginx config.
+pub fn valid_domain(domain: &str) -> bool {
+    let labels: Vec<&str> = domain.split('.').collect();
+    domain.len() <= 253 && labels.len() >= 2
+        && !labels.last().is_some_and(|tld| tld.bytes().all(|c| c.is_ascii_digit()))
+        && labels.iter().all(|label| {
+            !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-')
+                && label.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        })
+}
+
+pub fn valid_email(email: &str) -> bool {
+    email.len() <= 254 && email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && local.bytes().all(|c| c.is_ascii_alphanumeric() || b"._%+-".contains(&c))
+            && valid_domain(&domain.to_ascii_lowercase())
+    })
+}
+
 /// The SSH form of a GitHub/GitLab HTTPS repository URL, e.g.
 /// `https://github.com/owner/repo` → `git@github.com:owner/repo.git`. HTTPS
 /// clones authenticate with a username/token, not the server's SSH key.
@@ -243,12 +426,33 @@ else
     printf '[Awan] Pemeriksaan memerlukan APT/dpkg atau DNF/RPM.\n' >&2
     exit 2
 fi
-for entry in nginx:nginx docker:docker git:git node:node redis:redis-server postgres:postgres; do
+for entry in nginx:nginx certbot:certbot docker:docker git:git node:node redis:redis-server postgres:postgres; do
     id=${entry%%:*}
     executable=${entry#*:}
     if command -v "$executable" >/dev/null 2>&1; then printf 'B\t%s\n' "$id"; fi
 done
 if command -v docker-compose >/dev/null 2>&1; then printf 'B\tcompose\n'; fi
+# Enabled Nginx sites, one line per file: domains, proxy targets, whether it
+# has a certificate, and whether this app wrote it. Unreadable files are
+# skipped; nothing here needs root.
+for file in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [ -f "$file" ] && [ -r "$file" ] || continue
+    awk -v file="$file" '
+        NR == 1 && (index($0, "Managed by Awan Host Manager") || index($0, "Managed by Awan Host Remote")) { managed = 1 }
+        { sub(/#.*/, "") }
+        /^[[:space:]]*server_name[[:space:]]/ {
+            line = $0; sub(/^[[:space:]]*server_name[[:space:]]+/, "", line); sub(/;.*/, "", line)
+            n = split(line, parts, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) if (parts[i] != "" && parts[i] != "_" && !(parts[i] in seen)) { seen[parts[i]] = 1; names = names (names == "" ? "" : " ") parts[i] }
+        }
+        /^[[:space:]]*proxy_pass[[:space:]]/ {
+            line = $0; sub(/^[[:space:]]*proxy_pass[[:space:]]+/, "", line); sub(/;.*/, "", line)
+            if (line != "" && !(line in targets_seen)) { targets_seen[line] = 1; targets = targets (targets == "" ? "" : " ") line }
+        }
+        /^[[:space:]]*ssl_certificate[[:space:]]/ { ssl = 1 }
+        END { if (names != "") printf "N\t%s\t%s\t%s\t%d\t%d\n", file, names, targets, ssl, managed }
+    ' "$file"
+done
 printf 'AWAN_PACKAGES_END\n'
 "#)
 }
@@ -259,6 +463,21 @@ pub struct Inventory {
     pub manager: String,
     pub packages: Vec<Package>,
     pub binaries: Vec<String>,
+    pub nginx_sites: Vec<NginxSite>,
+}
+
+/// One enabled Nginx config file, read from its `server_name`,
+/// `proxy_pass`, and `ssl_certificate` lines.
+#[derive(Clone)]
+pub struct NginxSite {
+    pub file: String,
+    /// Space-separated `server_name` values.
+    pub names: String,
+    /// Space-separated `proxy_pass` targets; empty for static sites.
+    pub targets: String,
+    pub https: bool,
+    /// Written by the Setup domain dialog (first-line marker).
+    pub managed: bool,
 }
 
 pub fn valid_package_name(name: &str) -> bool {
@@ -269,7 +488,7 @@ pub fn valid_package_name(name: &str) -> bool {
 impl Inventory {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let output = std::str::from_utf8(bytes)?;
-        let mut result = Self { manager: String::new(), packages: Vec::new(), binaries: Vec::new() };
+        let mut result = Self { manager: String::new(), packages: Vec::new(), binaries: Vec::new(), nginx_sites: Vec::new() };
         let mut finished = false;
         for line in output.lines() {
             let columns: Vec<_> = line.split('\t').collect();
@@ -283,6 +502,14 @@ impl Inventory {
                     result.packages.push(Package { name: (*name).into(), version: (*version).into() });
                 }
                 ["B", id] if Software::ALL.iter().any(|app| app.id() == *id) => result.binaries.push((*id).into()),
+                ["N", file, names, targets, https @ ("0" | "1"), managed @ ("0" | "1")]
+                    if result.nginx_sites.len() < 500
+                        && [file, names, targets].iter().all(|field| field.len() <= 4096 && !field.chars().any(char::is_control)) => {
+                    result.nginx_sites.push(NginxSite {
+                        file: (*file).into(), names: (*names).into(), targets: (*targets).into(),
+                        https: *https == "1", managed: *managed == "1",
+                    });
+                }
                 ["AWAN_PACKAGES_END"] => { finished = true; break; }
                 _ => {},
             }

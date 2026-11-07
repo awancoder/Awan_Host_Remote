@@ -32,6 +32,14 @@ pub struct Terminal {
     pub docker: crate::docker::State,
     /// The Database Browser page (opened from a DB container).
     pub db_browser: crate::docker_db::State,
+    /// The Stalwart Setup page (opened from a Stalwart container).
+    pub stalwart: crate::stalwart::State,
+    /// Local port of the open SSH tunnel, its `host:port` on the server,
+    /// and whether the browser should open it once it is listening.
+    pub tunnel: Option<u16>,
+    pub tunnel_target: Option<String>,
+    pub tunnel_error: Option<String>,
+    pub tunnel_open_browser: bool,
     pub connected: bool,
     pub status: String,
     pub error: Option<String>,
@@ -54,6 +62,8 @@ impl Default for Terminal {
             git_busy: false, git_result: None,
             docker_busy: false, docker_result: None, docker: Default::default(),
             db_browser: Default::default(),
+            stalwart: Default::default(),
+            tunnel: None, tunnel_target: None, tunnel_error: None, tunnel_open_browser: false,
             live: crate::live::State::default(),
             connected: false, status: "Belum terhubung".into(), error: None,
             trust: None, key_path: String::new(), secret: String::new(),
@@ -76,6 +86,11 @@ impl Terminal {
 
     pub fn disconnect(&mut self) {
         self.live = crate::live::State::default();
+        // The tunnel and its listener lived in the session that just ended.
+        self.tunnel = None;
+        self.tunnel_target = None;
+        self.tunnel_open_browser = false;
+        self.stalwart.busy = false;
         if self.file_busy {
             self.file_result = Some(Err("SSH terputus saat operasi file. Draft tetap tersedia; jika sedang menyimpan, periksa hasil di server sebelum mencoba lagi.".into()));
             self.file_busy = false;
@@ -235,6 +250,13 @@ impl Terminal {
                     Err(error) => self.docker.stats_error = Some(error),
                 }
             }
+            ssh::Event::DockerResources(result) => {
+                self.docker.resources_loading = false;
+                match result {
+                    Ok(resources) => { self.docker.resources = Some(resources); self.docker.resources_error = None; }
+                    Err(error) => self.docker.resources_error = Some(error),
+                }
+            }
             ssh::Event::DockerOutput(bytes) => self.docker.push_output(&bytes),
             ssh::Event::DockerProgress(bytes) => {
                 self.docker.downloaded = Some(bytes);
@@ -257,6 +279,8 @@ impl Terminal {
                 // Restart/stop/up/down change container state; re-read it.
                 self.request_docker_list();
                 self.request_docker_stats();
+                // Image/volume lists also show which containers use them.
+                if self.docker.resources.is_some() || self.docker.resources_error.is_some() { self.request_docker_resources(); }
             }
             ssh::Event::DockerDb(container, result) => {
                 // A reply for a container the page has since switched away from.
@@ -271,6 +295,20 @@ impl Terminal {
                 for query in follow_up { self.request_db(query); }
             }
             ssh::Event::Live(kind, result) => self.live.finish(kind, result),
+            ssh::Event::Stalwart(result) => self.stalwart.finish(result),
+            ssh::Event::Tunnel(result) => match result {
+                Ok(port) => {
+                    self.tunnel = port;
+                    self.tunnel_error = None;
+                    if port.is_none() { self.tunnel_target = None; self.tunnel_open_browser = false; }
+                }
+                Err(error) => {
+                    self.tunnel = None;
+                    self.tunnel_target = None;
+                    self.tunnel_open_browser = false;
+                    self.tunnel_error = Some(error);
+                }
+            },
             ssh::Event::End(result) => {
                 self.disconnect();
                 if let Err(error) = result { self.error = Some(error); self.status = "Sesi gagal / terputus".into(); }
@@ -364,6 +402,16 @@ impl Terminal {
         }
     }
 
+    pub fn request_docker_resources(&mut self) {
+        if !self.connected || self.docker.resources_loading { return; }
+        let Some(connection) = &self.connection else { return; };
+        if connection.input.try_send(ssh::Command::DockerResources).is_ok() {
+            self.docker.resources_loading = true;
+        } else {
+            self.docker.resources_error = Some("Antrean SSH penuh atau koneksi terputus.".into());
+        }
+    }
+
     /// Takes one CPU/RAM sample of the running containers.
     pub fn request_docker_stats(&mut self) {
         if !self.connected || self.docker.stats_loading { return; }
@@ -412,8 +460,8 @@ impl Terminal {
         }
         if self.db_browser.loading {
             let queued = &mut self.db_browser.queued;
-            if matches!(query, crate::docker_db::Query::Rows { .. }) {
-                queued.retain(|waiting| !matches!(waiting, crate::docker_db::Query::Rows { .. }));
+            if matches!(query, crate::docker_db::Query::Rows { .. } | crate::docker_db::Query::LastPage { .. }) {
+                queued.retain(|waiting| !matches!(waiting, crate::docker_db::Query::Rows { .. } | crate::docker_db::Query::LastPage { .. }));
             }
             if queued.len() < 8 { queued.push_back(query); }
             return;
@@ -454,6 +502,38 @@ impl Terminal {
         self.git_result = None;
         self.git_busy = true;
         Ok(())
+    }
+
+    pub fn request_stalwart_check(&mut self, request: crate::stalwart::Request) -> Result<(), String> {
+        if !self.connected || self.stalwart.busy { return Err("Hubungkan SSH dan tunggu pemeriksaan sebelumnya selesai.".into()); }
+        let checked_for = (request.hostname.clone(), request.domain.clone());
+        let connection = self.connection.as_ref().ok_or("SSH tidak tersedia")?;
+        connection.input.try_send(ssh::Command::Stalwart(request)).map_err(|_| "Antrean SSH penuh atau koneksi terputus.".to_owned())?;
+        self.stalwart.busy = true;
+        self.stalwart.error = None;
+        self.stalwart.checked_for = Some(checked_for);
+        Ok(())
+    }
+
+    /// Forwards a local port to `target` (`host:port` as the server sees
+    /// it); the page opens the browser once `Event::Tunnel` reports it.
+    pub fn open_tunnel(&mut self, target: &str) -> Result<(), String> {
+        let (host, port) = target.rsplit_once(':').and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)))
+            .ok_or("Alamat tunnel tidak valid")?;
+        if !self.connected { return Err("SSH belum terhubung.".into()); }
+        let connection = self.connection.as_ref().ok_or("SSH tidak tersedia")?;
+        connection.input.try_send(ssh::Command::TunnelOpen { host: host.into(), port }).map_err(|_| "Antrean SSH penuh atau koneksi terputus.".to_owned())?;
+        self.tunnel_target = Some(target.into());
+        self.tunnel_error = None;
+        self.tunnel_open_browser = true;
+        Ok(())
+    }
+
+    pub fn close_tunnel(&mut self) {
+        if let Some(connection) = &self.connection {
+            let _ = connection.input.try_send(ssh::Command::TunnelClose);
+        }
+        self.tunnel_open_browser = false;
     }
 
     pub fn request_live(&mut self, request: crate::live::Request) {

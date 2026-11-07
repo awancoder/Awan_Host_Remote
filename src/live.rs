@@ -7,16 +7,39 @@ use russh::{Channel, ChannelMsg, client};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Kind { Summary, Ports }
+pub enum Kind { Summary, Ports, History }
 impl Kind {
     pub fn index(self) -> usize { self as usize }
-    pub fn name(self) -> &'static str { match self { Self::Summary => "summary", Self::Ports => "ports" } }
+    pub fn name(self) -> &'static str { match self { Self::Summary => "summary", Self::Ports => "ports", Self::History => "history" } }
 }
 
 pub struct Request { pub kind: Kind, pub fields: Zeroizing<Vec<String>> }
 impl Request {
     pub fn new(kind: Kind) -> Self { Self { kind, fields: Zeroizing::new(Vec::new()) } }
+    pub fn history(range: Range) -> Self {
+        Self { kind: Kind::History, fields: Zeroizing::new(vec![range.seconds().to_string()]) }
+    }
 }
+
+/// The span the Summary history chart shows. `Live` is the app's own 5 s
+/// samples; the others are read from sysstat (sar) on the server.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Range { #[default] Live, Day, Week }
+impl Range {
+    pub const ALL: [Self; 3] = [Self::Live, Self::Day, Self::Week];
+    pub fn seconds(self) -> u64 {
+        match self { Self::Live => 300, Self::Day => 86_400, Self::Week => 7 * 86_400 }
+    }
+}
+
+/// sysstat records a sample every 10 minutes, so re-reading the archive more
+/// often than this only repeats the same data.
+pub const ARCHIVE_REFRESH: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// One averaged sysstat bucket. `ago` is seconds before the server's clock
+/// at read time, so a skewed local clock does not shift the chart.
+#[derive(Clone, Copy)]
+pub struct ArchivePoint { pub ago: u64, pub cpu: f64, pub memory: f64 }
 
 pub struct Report { pub rows: Vec<Vec<String>> }
 impl Report {
@@ -26,25 +49,55 @@ impl Report {
     }
 }
 
+/// One Summary reading for the CPU/RAM history chart, both in percent.
+#[derive(Clone, Copy)]
+pub struct Sample { pub at: Instant, pub cpu: f64, pub memory: f64 }
+
+/// Samples kept for the history chart: 60 × the 5 s Summary poll ≈ 5 min.
+pub const HISTORY_LEN: usize = 60;
+
 #[derive(Default)]
 pub struct State {
-    pub data: [Option<Report>; 2],
-    pub errors: [Option<String>; 2],
-    pub checked: [Option<Instant>; 2],
+    pub data: [Option<Report>; 3],
+    pub errors: [Option<String>; 3],
+    pub checked: [Option<Instant>; 3],
     pub busy: Option<Kind>,
-    pub cpu: Vec<f32>,
+    pub history: Vec<Sample>,
+    pub range: Range,
+    /// Parsed `point` rows of the last History report, oldest first.
+    pub archive: Vec<ArchivePoint>,
 }
 impl State {
     pub fn finish(&mut self, kind: Kind, result: Result<Report, String>) {
         self.busy = None;
         let index = kind.index();
         self.checked[index] = Some(Instant::now());
+        if kind == Kind::History {
+            self.archive.clear();
+            // A reply for a range the user has since switched away from is
+            // dropped; leaving `checked` empty makes the poll ask again.
+            if let Ok(report) = &result {
+                if report.value("range") != self.range.seconds().to_string() {
+                    self.data[index] = None;
+                    self.checked[index] = None;
+                    return;
+                }
+                self.archive = report.rows.iter()
+                    .filter(|row| row.len() == 4 && row[0] == "point")
+                    .filter_map(|row| Some(ArchivePoint { ago: row[1].parse().ok()?, cpu: row[2].parse().ok()?, memory: row[3].parse().ok()? }))
+                    .collect();
+            }
+        }
         match result {
             Ok(report) => {
                 if kind == Kind::Summary {
-                    if let Ok(cpu) = report.value("cpu").parse::<f32>() {
-                        if self.cpu.len() >= 60 { self.cpu.remove(0); }
-                        self.cpu.push(cpu / 100.0);
+                    // Both series share one x axis, so a reading only joins
+                    // the history when CPU and memory were both read.
+                    let cpu = report.value("cpu").parse::<f64>().ok();
+                    let memory = percent(report.value("memory_used"), report.value("memory_total"));
+                    if let (Some(cpu), Some(memory)) = (cpu, memory) {
+                        if self.history.len() >= HISTORY_LEN { self.history.remove(0); }
+                        self.history.push(Sample { at: Instant::now(), cpu: cpu.clamp(0.0, 100.0), memory });
                     }
                 }
                 self.data[index] = Some(report);
@@ -54,19 +107,48 @@ impl State {
         }
     }
     pub fn invalidate(&mut self) {
-        for kind in [Kind::Summary, Kind::Ports] {
+        for kind in [Kind::Summary, Kind::Ports, Kind::History] {
             self.data[kind.index()] = None;
             self.checked[kind.index()] = None;
         }
+        self.archive.clear();
+    }
+
+    /// Switches the chart's range; a server range is re-read from scratch.
+    pub fn set_range(&mut self, range: Range) {
+        self.range = range;
+        let index = Kind::History.index();
+        self.data[index] = None;
+        self.errors[index] = None;
+        self.checked[index] = None;
+        self.archive.clear();
+    }
+}
+
+/// `used / total` in percent (0–100), or `None` when either is unreadable.
+pub fn percent(used: &str, total: &str) -> Option<f64> {
+    match (used.parse::<f64>(), total.parse::<f64>()) {
+        (Ok(used), Ok(total)) if total > 0.0 => Some((used / total * 100.0).clamp(0.0, 100.0)),
+        _ => None,
     }
 }
 
 pub async fn execute(channel: &mut Channel<client::Msg>, request: Request) -> Result<Report> {
-    let script = include_str!("live_remote.py");
-    channel.exec(true, format!("python3 -c '{}'", script.replace('\'', "'\"'\"'"))).await?;
-    let mut payload = Zeroizing::new(request.kind.name().as_bytes().to_vec());
+    run_script(channel, python_command(include_str!("live_remote.py")), request.kind.name(), &request.fields).await
+}
+
+/// `python3 -c '<script>'`, quoted for a POSIX shell.
+pub fn python_command(script: &str) -> String {
+    format!("python3 -c '{}'", script.replace('\'', "'\"'\"'"))
+}
+
+/// Runs `command` (a script speaking the `AWAN_LIVE_V1` protocol) with
+/// `kind` and hex-encoded `fields` on stdin, and parses its rows.
+pub async fn run_script(channel: &mut Channel<client::Msg>, command: String, kind: &str, fields: &[String]) -> Result<Report> {
+    channel.exec(true, command).await?;
+    let mut payload = Zeroizing::new(kind.as_bytes().to_vec());
     payload.push(b'\n');
-    for field in request.fields.iter() {
+    for field in fields.iter() {
         if field.len() > 4096 || field.contains('\0') { bail!("Kolom permintaan terlalu panjang atau berisi NUL."); }
         for byte in field.bytes() { payload.extend_from_slice(format!("{byte:02x}").as_bytes()); }
         payload.push(b'\n');

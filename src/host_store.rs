@@ -22,7 +22,9 @@ pub struct Login {
 }
 
 #[cfg(windows)]
-const PREFIX: &str = "AwanHostRemote/ssh/v1/";
+const PREFIX: &str = "AwanHostManager/ssh/v1/";
+#[cfg(windows)]
+const LEGACY_PREFIX: &str = "AwanHostRemote/ssh/v1/";
 #[cfg(any(windows, target_os = "linux"))]
 const MAX_BLOB: usize = 2560;
 
@@ -124,7 +126,12 @@ mod platform {
         while length < 32767 && unsafe { *entry.target.add(length) } != 0 { length += 1; }
         if length == 32767 { bail!("Target credential terlalu panjang."); }
         let name = String::from_utf16(unsafe { std::slice::from_raw_parts(entry.target, length) })?;
-        if name.to_lowercase() != target(&login.host.address).to_lowercase() { bail!("IP profil tidak cocok dengan target credential."); }
+        let expected = target(&login.host.address).to_lowercase();
+        let legacy_expected = format!("{LEGACY_PREFIX}{}", address_key(&login.host.address)).to_lowercase();
+        let name_lower = name.to_lowercase();
+        if name_lower != expected && name_lower != legacy_expected {
+            bail!("IP profil tidak cocok dengan target credential.");
+        }
         Ok(login)
     }
 
@@ -145,28 +152,33 @@ mod platform {
         let name = wide(&target(address))?;
         let mut pointer = ptr::null_mut();
         if unsafe { CredReadW(name.as_ptr(), 1, 0, &mut pointer) } == 0 {
-            return Err(std::io::Error::last_os_error()).context("Login tersimpan tidak dapat dibaca; gunakan login manual");
+            let legacy_name = wide(&format!("{LEGACY_PREFIX}{}", address_key(address)))?;
+            if unsafe { CredReadW(legacy_name.as_ptr(), 1, 0, &mut pointer) } == 0 {
+                return Err(std::io::Error::last_os_error()).context("Login tersimpan tidak dapat dibaca; gunakan login manual");
+            }
         }
         let guard = One(pointer);
         unsafe { read_entry(guard.0) }
     }
     pub fn list() -> Result<(Vec<Host>, usize)> {
-        let filter = wide(&format!("{PREFIX}*"))?;
-        let mut count = 0;
-        let mut pointer = ptr::null_mut();
-        if unsafe { CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut pointer) } == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(1168) { return Ok((Vec::new(), 0)); }
-            return Err(error).context("Daftar SSH tersimpan tidak dapat dibaca");
-        }
-        let guard = Many { pointer, count: count as usize };
-        if guard.count > 1000 || (guard.count > 0 && guard.pointer.is_null()) { bail!("Daftar credential tidak valid atau melebihi 1.000 profil."); }
         let mut hosts = Vec::new();
         let mut skipped = 0;
-        for index in 0..guard.count {
-            match unsafe { read_entry(*guard.pointer.add(index)) } {
-                Ok(login) => hosts.push(login.host),
-                Err(_) => skipped += 1,
+        for prefix in [PREFIX, LEGACY_PREFIX] {
+            let filter = wide(&format!("{prefix}*"))?;
+            let mut count = 0;
+            let mut pointer = ptr::null_mut();
+            if unsafe { CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut pointer) } == 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(1168) { continue; }
+                return Err(error).context("Daftar SSH tersimpan tidak dapat dibaca");
+            }
+            let guard = Many { pointer, count: count as usize };
+            if guard.count > 1000 || (guard.count > 0 && guard.pointer.is_null()) { bail!("Daftar credential tidak valid atau melebihi 1.000 profil."); }
+            for index in 0..guard.count {
+                match unsafe { read_entry(*guard.pointer.add(index)) } {
+                    Ok(login) => hosts.push(login.host),
+                    Err(_) => skipped += 1,
+                }
             }
         }
         hosts.sort_by(|a, b| a.address.cmp(&b.address));
@@ -175,10 +187,9 @@ mod platform {
     }
     pub fn delete(address: &str) -> Result<()> {
         let name = wide(&target(address))?;
-        if unsafe { CredDeleteW(name.as_ptr(), 1, 0) } == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(1168) { return Err(error).context("Gagal menghapus login tersimpan"); }
-        }
+        let legacy_name = wide(&format!("{LEGACY_PREFIX}{}", address_key(address)))?;
+        let _ = unsafe { CredDeleteW(name.as_ptr(), 1, 0) };
+        let _ = unsafe { CredDeleteW(legacy_name.as_ptr(), 1, 0) };
         Ok(())
     }
 }
@@ -193,7 +204,8 @@ mod platform {
     use std::collections::HashMap;
     use secret_service::{EncryptionType, blocking::{Item, SecretService}};
 
-    const APP: &str = "awan-host-remote";
+    const APP: &str = "awan-host-manager";
+    const LEGACY_APP: &str = "awan-host-remote";
     const KIND: &str = "ssh-v1";
 
     fn connect<'a>() -> Result<SecretService<'a>> {
@@ -202,13 +214,22 @@ mod platform {
     }
     fn search<'a>(service: &'a SecretService, address: Option<&str>) -> Result<Vec<Item<'a>>> {
         let key = address.map(address_key);
-        let mut query = HashMap::from([("application", APP), ("kind", KIND)]);
-        if let Some(key) = key.as_deref() { query.insert("address", key); }
-        let found = service.search_items(query).context("Daftar SSH tersimpan tidak dapat dibaca dari keyring")?;
-        for item in &found.locked {
-            item.unlock().context("Keyring terkunci; buka kunci keyring untuk memakai login tersimpan")?;
+        let mut items = Vec::new();
+        for app in [APP, LEGACY_APP] {
+            let mut query = HashMap::from([("application", app), ("kind", KIND)]);
+            if let Some(key) = key.as_deref() { query.insert("address", key); }
+            if let Ok(found) = service.search_items(query) {
+                for item in &found.locked {
+                    let _ = item.unlock();
+                }
+                items.extend(found.unlocked);
+                items.extend(found.locked);
+            }
+            if address.is_some() && !items.is_empty() {
+                break;
+            }
         }
-        Ok(found.unlocked.into_iter().chain(found.locked).collect())
+        Ok(items)
     }
     fn read_item(item: &Item) -> Result<Login> {
         let secret = Zeroizing::new(item.get_secret().context("Login tersimpan tidak dapat dibaca; gunakan login manual")?);
@@ -230,7 +251,7 @@ mod platform {
         let key = address_key(&host.address);
         let attributes = HashMap::from([("application", APP), ("kind", KIND), ("address", key.as_str())]);
         // replace = true: one item per address, overwritten only after a successful login.
-        collection.create_item(&format!("Awan Host Remote SSH: {key}"), attributes, &bytes, true, "application/octet-stream")
+        collection.create_item(&format!("Awan Host Manager SSH: {key}"), attributes, &bytes, true, "application/octet-stream")
             .context("Login berhasil, tetapi profil gagal disimpan ke keyring")?;
         Ok(())
     }
@@ -274,13 +295,39 @@ mod platform {
 }
 pub use platform::{read, save};
 
+/// Rewrites the saved profile at `from` with edited connection details,
+/// keeping its login. The new entry is written before the old address is
+/// removed, so a failed save never loses the existing login. A changed auth
+/// method makes the saved secret meaningless (a key passphrase is not a
+/// password), so that login is deleted and the host stays unsaved until the
+/// next remembered login. Returns the host and a warning for a stale entry.
+fn update(from: &str, mut host: Host) -> Result<(Host, Option<String>)> {
+    let login = platform::read(from)?;
+    if login.host.key_auth != host.key_auth {
+        platform::delete(from)?;
+        host.saved = false;
+        return Ok((host, None));
+    }
+    platform::save(&host, &login.key_path, login.secret.as_str()).context("Profil tersimpan gagal diperbarui")?;
+    host.saved = true;
+    let mut warning = None;
+    if address_key(from) != host.address {
+        if let Err(error) = platform::delete(from) {
+            warning = Some(format!("Profil baru tersimpan, tetapi profil lama {from} gagal dihapus: {error:#}"));
+        }
+    }
+    Ok((host, warning))
+}
+
 #[derive(Clone)]
 pub enum Event {
     Listed(Result<(Vec<Host>, usize), String>),
     Deleted(String, Result<(), String>),
+    /// Original address, then the edited host (`saved` reflects whether a
+    /// login is still stored) plus an optional warning.
+    Updated(String, Result<(Host, Option<String>), String>),
 }
-#[derive(Debug)]
-enum Job { Delete(String) }
+enum Job { Delete(String), Update { from: String, host: Host } }
 pub struct Store {
     jobs: tokio::sync::mpsc::Sender<Job>,
     pub busy: bool,
@@ -296,9 +343,18 @@ impl Store {
         let started = std::thread::Builder::new().name("awan-profiles".into()).spawn(move || {
             let result = platform::list().map_err(|error| format!("{error:#}"));
             if sender.blocking_send(Event::Listed(result)).is_err() { return; }
-            while let Some(Job::Delete(address)) = requests.blocking_recv() {
-                let result = platform::delete(&address).map_err(|error| format!("{error:#}"));
-                if sender.blocking_send(Event::Deleted(address, result)).is_err() { return; }
+            while let Some(job) = requests.blocking_recv() {
+                let event = match job {
+                    Job::Delete(address) => {
+                        let result = platform::delete(&address).map_err(|error| format!("{error:#}"));
+                        Event::Deleted(address, result)
+                    }
+                    Job::Update { from, host } => {
+                        let result = update(&from, host).map_err(|error| format!("{error:#}"));
+                        Event::Updated(from, result)
+                    }
+                };
+                if sender.blocking_send(event).is_err() { return; }
             }
         });
         if let Err(error) = started {
@@ -312,6 +368,12 @@ impl Store {
     pub fn delete(&mut self, address: String) -> Result<()> {
         if self.busy { bail!("Tunggu penyimpanan profil selesai."); }
         self.jobs.try_send(Job::Delete(address)).context("Pekerjaan penyimpanan tidak tersedia")?;
+        self.busy = true;
+        Ok(())
+    }
+    pub fn update(&mut self, from: String, host: Host) -> Result<()> {
+        if self.busy { bail!("Tunggu penyimpanan profil selesai."); }
+        self.jobs.try_send(Job::Update { from, host }).context("Pekerjaan penyimpanan tidak tersedia")?;
         self.busy = true;
         Ok(())
     }

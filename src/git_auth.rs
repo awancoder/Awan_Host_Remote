@@ -176,7 +176,7 @@ case "$action" in
         ;;
     keygen)
         if [ -z "$key" ]; then
-            ssh-keygen -q -t ed25519 -N '' -C "awan-host-remote@$(uname -n)" -f "$HOME/.ssh/id_ed25519" </dev/null \
+            ssh-keygen -q -t ed25519 -N '' -C "awan-host-manager@$(uname -n)" -f "$HOME/.ssh/id_ed25519" </dev/null \
                 || { printf '[Awan] Gagal membuat SSH key.\n' >&2; exit 5; }
             key="$HOME/.ssh/id_ed25519"
         fi

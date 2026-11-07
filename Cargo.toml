@@ -1,9 +1,9 @@
 [package]
-name = "awan-host-remote"
+name = "awan-host-manager"
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.89"
-description = "Native Rust UI preview for Awan Host Remote"
+description = "Native Rust UI preview for Awan Host Manager"
 publish = false
 
 [dependencies]
@@ -35,7 +35,7 @@ zeroize = "1.8"
 secret-service = { version = "4.0", features = ["rt-async-io-crypto-rust"] }
 
 [package.metadata.deb]
-name = "awan-host-remote"
+name = "awan-host-manager"
 maintainer = "Awan <awan@awandigitals.com>"
 copyright = "Awan Digitals"
 extended-description = "Native Rust desktop app to connect to and manage Linux servers over SSH."
@@ -44,9 +44,9 @@ priority = "optional"
 depends = "$auto, libvulkan1, libxkbcommon-x11-0, libwayland-client0, libfontconfig1"
 recommends = "gnome-keyring | kwalletmanager, mesa-vulkan-drivers"
 assets = [
-    ["target/release/awan-host-remote", "usr/bin/", "755"],
-    ["packaging/linux/awan-host-remote.desktop", "usr/share/applications/", "644"],
-    ["assets/icon.png", "usr/share/pixmaps/awan-host-remote.png", "644"],
+    ["target/release/awan-host-manager", "usr/bin/", "755"],
+    ["packaging/linux/awan-host-manager.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/pixmaps/awan-host-manager.png", "644"],
 ]
 
 [profile.release]

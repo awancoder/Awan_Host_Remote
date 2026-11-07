@@ -2,17 +2,20 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt, h_flex, v_flex,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
+    chart::AreaChart,
     checkbox::Checkbox,
     empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle},
     form::{Field, Form},
     input::{Input, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    notification::Notification,
+    progress::{Progress, ProgressCircle},
     resizable::{h_resizable, resizable_panel},
-    scroll::ScrollableElement,
+    scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     spinner::Spinner,
-    table::{Column, DataTable, TableDelegate, TableState},
+    table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
     tag::Tag,
     toolbar::Toolbar,
 };
@@ -73,6 +76,16 @@ struct ChmodUi {
     original: u32,
     mode: u32,
     recursive: bool,
+}
+
+/// Detailed file / folder properties dialog.
+struct FileInfoUi {
+    path: String,
+    is_dir: bool,
+    current_mode: u32,
+    loading: bool,
+    error: Option<String>,
+    info: Option<crate::remote_fs::FileInfo>,
 }
 
 enum MoveRow {
@@ -158,6 +171,16 @@ pub struct AwanApp {
     host_key_auth: bool,
     host_form_error: Option<String>,
 
+    /// Edit Connection dialog inputs, separate from the Add dialog's so
+    /// opening one never pre-fills the other.
+    edit_host_name: Entity<InputState>,
+    edit_host_address: Entity<InputState>,
+    edit_host_user: Entity<InputState>,
+    edit_host_port: Entity<InputState>,
+    edit_host_key_auth: bool,
+    /// Address of the host being edited (its identity before the edit).
+    edit_host_from: Option<String>,
+
     key_path: Entity<InputState>,
     secret: Entity<InputState>,
 
@@ -171,6 +194,15 @@ pub struct AwanApp {
     /// The installed-packages list is virtualized (hundreds of rows), so it
     /// scrolls on its own handle instead of the page's scroll area.
     package_list_scroll: UniformListScrollHandle,
+    /// Nginx domain setup dialog. Values are kept between openings so a
+    /// failed run (e.g. DNS not ready for Certbot) can be retried as is.
+    nginx_domain: Entity<InputState>,
+    nginx_port: Entity<InputState>,
+    nginx_email: Entity<InputState>,
+    nginx_https: bool,
+    /// Filter and (virtualized) scroll of the Nginx card's domain list.
+    nginx_site_search: Entity<InputState>,
+    nginx_site_scroll: UniformListScrollHandle,
 
     explorer_initialized: bool,
     explorer_owner: String,
@@ -214,6 +246,7 @@ pub struct AwanApp {
     fs_pending: Option<FsPending>,
     move_picker: Option<MovePicker>,
     chmod_ui: Option<ChmodUi>,
+    file_info_ui: Option<FileInfoUi>,
     fs_name_input: Entity<InputState>,
     /// Last file-manager action's (or Import batch's) result/error, shown in
     /// the Explorer panel until the next action replaces it.
@@ -221,6 +254,9 @@ pub struct AwanApp {
     /// Whether `fs_message` reports a failure (rendered as a red notice)
     /// rather than a neutral/success line.
     fs_message_error: bool,
+    /// Last deleted path and recursive flag, kept so permission denial can
+    /// offer a sudo retry.
+    fs_last_delete: Option<(String, bool)>,
     import_queue: Vec<ImportTask>,
     import_total: usize,
     import_failed: usize,
@@ -239,9 +275,16 @@ pub struct AwanApp {
     compose_pending: Option<String>,
 
     docker_search: Entity<InputState>,
+    stalwart_hostname: Entity<InputState>,
+    /// Where the Cloudflare import file was saved, or why it was not.
+    stalwart_export: Option<Result<std::path::PathBuf, String>>,
     /// Command typed in the Docker page's Exec dialog.
     docker_exec_input: Entity<InputState>,
     docker_network_input: Entity<InputState>,
+    docker_pull_input: Entity<InputState>,
+    docker_volume_input: Entity<InputState>,
+    /// Docker page tab: 0 = containers, 1 = images, 2 = volumes.
+    docker_tab: u8,
     docker_output_scroll: ScrollHandle,
     /// Last `docker::State::revision` scrolled to, so new output keeps the
     /// log pinned to the bottom without re-scrolling on every frame.
@@ -289,6 +332,7 @@ impl AwanApp {
 
         let lang = Language::load_saved().unwrap_or_else(Language::detect_system);
         let t = i18n::strings(lang);
+        gpui_kit::component::Theme::set_scrollbar_mode(ScrollbarMode::Hover, cx);
 
         Self {
             page: Page::Hosts, lang, hosts: Vec::new(), active: None, notice: None,
@@ -303,6 +347,12 @@ impl AwanApp {
             host_port: cx.new(|cx| InputState::new(window, cx).placeholder("22").default_value("22")),
             host_key_auth: true,
             host_form_error: None,
+            edit_host_name: cx.new(|cx| InputState::new(window, cx).placeholder(t.host_name_placeholder)),
+            edit_host_address: cx.new(|cx| InputState::new(window, cx).placeholder("192.0.2.10")),
+            edit_host_user: cx.new(|cx| InputState::new(window, cx).placeholder("ubuntu")),
+            edit_host_port: cx.new(|cx| InputState::new(window, cx).placeholder("22")),
+            edit_host_key_auth: true,
+            edit_host_from: None,
             key_path: cx.new(|cx| InputState::new(window, cx).placeholder(t.host_key_path_placeholder)),
             secret: cx.new(|cx| InputState::new(window, cx).placeholder(t.host_secret_placeholder).masked(true)),
             firewall_engine: "ufw".into(),
@@ -311,6 +361,12 @@ impl AwanApp {
             package_search: cx.new(|cx| InputState::new(window, cx).placeholder(t.tools_search_placeholder)),
             package_tab: 0,
             package_list_scroll: UniformListScrollHandle::new(),
+            nginx_domain: cx.new(|cx| InputState::new(window, cx).placeholder("mail.example.com")),
+            nginx_port: cx.new(|cx| InputState::new(window, cx).placeholder("8080")),
+            nginx_email: cx.new(|cx| InputState::new(window, cx).placeholder("admin@example.com")),
+            nginx_https: true,
+            nginx_site_search: cx.new(|cx| InputState::new(window, cx).placeholder(t.nginx_sites_search_placeholder)),
+            nginx_site_scroll: UniformListScrollHandle::new(),
             explorer_initialized: false,
             explorer_owner: String::new(),
             explorer_error: None,
@@ -326,7 +382,7 @@ impl AwanApp {
             editor_host: String::new(),
             editor_pending_host: String::new(),
             editor_path_input: cx.new(|cx| InputState::new(window, cx).placeholder(t.editor_path_placeholder)),
-            editor_text: cx.new(|cx| gpui_kit::component::input::EditorState::new(window, cx).language("plaintext")),
+            editor_text: cx.new(|cx| gpui_kit::component::input::EditorState::new(window, cx).language("plaintext").indent_guides(true)),
             editor_original: String::new(),
             editor_revision: None,
             editor_message: None,
@@ -337,9 +393,11 @@ impl AwanApp {
             fs_pending: None,
             move_picker: None,
             chmod_ui: None,
+            file_info_ui: None,
             fs_name_input: cx.new(|cx| InputState::new(window, cx)),
             fs_message: None,
             fs_message_error: false,
+            fs_last_delete: None,
             import_queue: Vec::new(),
             import_total: 0,
             import_failed: 0,
@@ -350,16 +408,21 @@ impl AwanApp {
             git_auth: GitAuthUi::default(),
             compose_pending: None,
             docker_search: cx.new(|cx| InputState::new(window, cx).placeholder(t.docker_search_placeholder)),
+            stalwart_hostname: cx.new(|cx| InputState::new(window, cx).placeholder("mail.example.com")),
+            stalwart_export: None,
             docker_exec_input: cx.new(|cx| InputState::new(window, cx).placeholder("ls -la /app")),
             docker_network_input: cx.new(|cx| InputState::new(window, cx).placeholder("edge").default_value("edge")),
+            docker_pull_input: cx.new(|cx| InputState::new(window, cx).placeholder("nginx:alpine")),
+            docker_volume_input: cx.new(|cx| InputState::new(window, cx).placeholder("app_data")),
+            docker_tab: 0,
             docker_output_scroll: ScrollHandle::new(),
             docker_seen_revision: 0,
             docker_sort: 0,
-            db_grid: cx.new(|cx| TableState::new(DbGrid::default(), window, cx).sortable(false).col_movable(false).cell_selectable(true)),
+            db_grid: cx.new(|cx| TableState::new(DbGrid::default(), window, cx).sortable(true).col_movable(false).cell_selectable(true)),
             db_grid_revision: 0,
             db_tab: 0,
             db_sql_editor: cx.new(|cx| gpui_kit::component::input::EditorState::new(window, cx).language("sql")),
-            db_sql_grid: cx.new(|cx| TableState::new(DbGrid::default(), window, cx).sortable(false).col_movable(false).cell_selectable(true)),
+            db_sql_grid: cx.new(|cx| TableState::new(DbGrid::default(), window, cx).sortable(true).col_movable(false).cell_selectable(true)),
             db_sql_revision: 0,
             _subscriptions: Vec::new(),
         }
@@ -408,6 +471,7 @@ impl AwanApp {
         self.page = page;
         self.notice = None;
         self.sidebar_expanded.insert(index);
+        self.poll_live_page(cx);
         let _ = (window, cx);
     }
 
@@ -462,6 +526,16 @@ impl AwanApp {
         if let Some(session) = self.sessions.get_mut(address) {
             session.terminal.disconnect();
             session.widget = None;
+        }
+        self.leave_host_pages(address);
+    }
+
+    /// Once the host being viewed is no longer connected, its pages can
+    /// only show stale or "Unknown" data — go back to Hosts, where it can
+    /// be reconnected. Settings and About are not tied to a host, so they stay.
+    fn leave_host_pages(&mut self, address: &str) {
+        if self.active_address().as_deref() == Some(address) && !matches!(self.page, Page::Hosts | Page::Settings | Page::About) {
+            self.page = Page::Hosts;
         }
     }
 
@@ -531,33 +605,100 @@ impl AwanApp {
                 self.host_store_message = Some(i18n::profile_deleted(self.lang, &address));
             }
             host_store::Event::Deleted(_, Err(error)) => self.host_store_message = Some(error),
+            host_store::Event::Updated(from, Ok((host, warning))) => {
+                let t = self.t();
+                let message = if host.saved { t.edit_host_done } else { t.edit_host_login_removed };
+                self.host_store_message = Some(warning.unwrap_or_else(|| message.into()));
+                self.apply_host_edit(&from, host);
+            }
+            host_store::Event::Updated(_, Err(error)) => self.host_store_message = Some(error),
         }
+    }
+
+    /// Replaces the host listed under `from` with its edited details. A
+    /// changed address is a different identity: the old address's leftover
+    /// (disconnected) session state is dropped with it.
+    fn apply_host_edit(&mut self, from: &str, host: Host) {
+        let Some(index) = self.hosts.iter().position(|existing| existing.address == from) else { return; };
+        if host.address != from {
+            self.sessions.remove(from);
+            if self.connecting_focus.as_deref() == Some(from) { self.connecting_focus = None; }
+        } else if let Some(session) = self.sessions.get_mut(from) {
+            // The last failure was for the details just replaced.
+            session.terminal.error = None;
+        }
+        self.hosts[index] = host;
     }
 
     /// Requests fresh data for whichever live page is currently open, on
     /// that page's own refresh interval — ticked from the timer loop in
-    /// `new()`, not from `render()` (which only runs on redraw, not on a
-    /// schedule).
+    /// `new()`, and also immediately upon switching pages or connecting.
+    /// Initial load is always performed on first open even if auto-refresh is off.
     fn poll_live_page(&mut self, cx: &mut Context<Self>) {
-        if !self.live_auto_refresh { return; }
+        if !self.terminal().connected { return; }
+
+        if self.page == Page::Summary {
+            let summary_last = self.terminal().live.checked[crate::live::Kind::Summary.index()];
+            let summary_due = match summary_last {
+                None => true,
+                Some(at) => self.live_auto_refresh && at.elapsed() >= std::time::Duration::from_secs(5),
+            };
+            if summary_due && self.terminal().live.busy.is_none() && !self.terminal().update_running {
+                self.terminal_mut().request_live(crate::live::Request::new(crate::live::Kind::Summary));
+                cx.notify();
+                return;
+            }
+
+            let live = &self.terminal().live;
+            let range = live.range;
+            let due = match live.checked[crate::live::Kind::History.index()] {
+                None => true,
+                Some(at) => self.live_auto_refresh && at.elapsed() >= crate::live::ARCHIVE_REFRESH,
+            };
+            if range != crate::live::Range::Live && due && live.busy.is_none() && !self.terminal().update_running {
+                self.terminal_mut().request_live(crate::live::Request::history(range));
+                cx.notify();
+                return;
+            }
+            return;
+        }
+
         // Docker page: a fresh CPU/RAM sample every 10 s while it is open.
+        // Initial stats sample is always fetched on first open even if auto-refresh is off.
         if self.page == Page::Docker {
             let docker = &self.terminal().docker;
-            if self.terminal().connected && !docker.stats_loading && docker.stats_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(10)) {
+            let due = match docker.stats_at {
+                None => true,
+                Some(at) => self.live_auto_refresh && at.elapsed() >= std::time::Duration::from_secs(10),
+            };
+            if !docker.stats_loading && due {
                 self.terminal_mut().request_docker_stats();
                 cx.notify();
             }
             return;
         }
+
+        // Applications page: auto-scan package inventory on first open if not yet scanned.
+        if self.page == Page::Tools {
+            if self.terminal().inventory.is_none() && !self.terminal().inventory_scanning && self.terminal().can_maintain() {
+                self.terminal_mut().refresh_packages();
+                cx.notify();
+            }
+            return;
+        }
+
         let kind = match self.page {
-            Page::Summary => crate::live::Kind::Summary,
             Page::Firewall => crate::live::Kind::Ports,
             _ => return,
         };
-        if !self.terminal().connected { return; }
-        let interval = std::time::Duration::from_secs(if kind == crate::live::Kind::Summary { 5 } else { 15 });
+
+        let interval = std::time::Duration::from_secs(15);
         let last = self.terminal().live.checked[kind.index()];
-        if last.is_none_or(|last| last.elapsed() >= interval) {
+        let due = match last {
+            None => true,
+            Some(at) => self.live_auto_refresh && at.elapsed() >= interval,
+        };
+        if due && self.terminal().live.busy.is_none() && !self.terminal().update_running {
             self.terminal_mut().request_live(crate::live::Request::new(kind));
             cx.notify();
         }
@@ -612,8 +753,15 @@ impl AwanApp {
                         let outcome = this.update_in(cx, |app, window, cx| {
                             let session = app.sessions.entry(address.clone()).or_default();
                             let was_connected = session.terminal.connected;
+                            let error_before = session.terminal.error.clone();
                             let bytes = session.terminal.handle_ssh_event(event);
                             let became_connected = !was_connected && session.terminal.connected;
+                            // A drop the user did not ask for: `disconnect_host`
+                            // clears `connected` itself, so its trailing `End`
+                            // event no longer counts as a change here.
+                            let lost = was_connected && !session.terminal.connected;
+                            // Only the reason this event brought, not an older message.
+                            let lost_error = session.terminal.error.clone().filter(|error| error_before.as_ref() != Some(error));
                             let file_result = session.terminal.file_result.take();
                             let fs_result = session.terminal.fs_result.take();
                             let git_result = session.terminal.git_result.take();
@@ -648,11 +796,25 @@ impl AwanApp {
                                     app.handle_docker_result(result, window, cx);
                                 }
                             }
-                            if became_connected && app.connecting_focus.as_deref() == Some(address.as_str()) {
-                                app.connecting_focus = None;
-                                if let Some(index) = app.hosts.iter().position(|host| host.address == address) {
-                                    app.activate(index, window, cx);
+                            if became_connected {
+                                if app.connecting_focus.as_deref() == Some(address.as_str()) {
+                                    app.connecting_focus = None;
+                                    if let Some(index) = app.hosts.iter().position(|host| host.address == address) {
+                                        app.activate(index, window, cx);
+                                    }
+                                } else if app.active_address().as_deref() == Some(address.as_str()) {
+                                    app.poll_live_page(cx);
                                 }
+                            }
+                            if lost {
+                                app.leave_host_pages(&address);
+                                let name = app.hosts.iter().find(|host| host.address == address).map_or(address.clone(), |host| host.name.clone());
+                                let lang = app.lang;
+                                window.push_notification(
+                                    Notification::warning(i18n::host_connection_lost(lang, &name, lost_error.as_deref()))
+                                        .title(app.t().host_connection_lost_title),
+                                    cx,
+                                );
                             }
                             cx.notify();
                             bytes
@@ -673,10 +835,10 @@ impl AwanApp {
         let address = self.host_address.clone();
         let user = self.host_user.clone();
         let port = self.host_port.clone();
-        let key_auth = self.host_key_auth;
         let t = self.t();
         let entity = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let key_auth = entity.read(cx).host_key_auth;
             let entity_for_checkbox = entity.clone();
             let entity_for_submit = entity.clone();
             dialog
@@ -726,7 +888,7 @@ impl AwanApp {
                 } else {
                     self.hosts.push(host);
                     let index = self.hosts.len() - 1;
-                    self.activate(index, window, cx);
+                    self.switch_to(index, Page::Terminal, window, cx);
                 }
             }
             Err(error) => {
@@ -734,6 +896,102 @@ impl AwanApp {
                 window.push_notification(error, cx);
             }
         }
+        cx.notify();
+    }
+
+    fn open_edit_host_dialog(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.hosts.get(index).cloned() else { return; };
+        for (input, value) in [
+            (&self.edit_host_name, host.name.clone()), (&self.edit_host_address, host.address.clone()),
+            (&self.edit_host_user, host.user.clone()), (&self.edit_host_port, host.port.to_string()),
+        ] {
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+        self.edit_host_key_auth = host.key_auth;
+        self.edit_host_from = Some(host.address.clone());
+        let name = self.edit_host_name.clone();
+        let address = self.edit_host_address.clone();
+        let user = self.edit_host_user.clone();
+        let port = self.edit_host_port.clone();
+        let t = self.t();
+        let entity = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            // Read on every render so the checkbox and the warning follow
+            // the current choice instead of the value at open time.
+            let key_auth = entity.read(cx).edit_host_key_auth;
+            let entity_for_checkbox = entity.clone();
+            let entity_for_submit = entity.clone();
+            dialog
+                .title(t.edit_host_title)
+                .child(
+                    v_flex().gap_3()
+                        .child(
+                            Form::new()
+                                .child(Field::new().label(t.add_host_field_name).child(Input::new(&name)))
+                                .child(Field::new().label(t.add_host_field_address).child(Input::new(&address)))
+                                .child(Field::new().label(t.add_host_field_username).child(Input::new(&user)))
+                                .child(Field::new().label(t.add_host_field_port).child(Input::new(&port)))
+                                .child(Field::new().label(t.add_host_field_auth).child(
+                                    Checkbox::new("edit-key-auth").label(t.add_host_use_key_checkbox).checked(key_auth)
+                                        .on_change(move |value: &bool, _, cx| {
+                                            let value = *value;
+                                            entity_for_checkbox.update(cx, |this, cx| { this.edit_host_key_auth = value; cx.notify(); });
+                                        }),
+                                )),
+                        )
+                        .when(host.saved && key_auth != host.key_auth, |body| {
+                            body.child(div().text_xs().text_color(cx.theme().yellow).child(t.edit_host_auth_change_note))
+                        }),
+                )
+                .footer(
+                    gpui_kit::component::dialog::DialogFooter::new()
+                        .gap_2()
+                        .child(gpui_kit::component::dialog::DialogClose::new().child(Button::new("cancel-edit-host").label(t.add_host_cancel)))
+                        .child(gpui_kit::component::dialog::DialogAction::new().child(
+                            Button::new("submit-edit-host").primary().label(t.edit_host_submit).on_click(
+                                move |_, window, cx| {
+                                    entity_for_submit.update(cx, |this, cx| this.submit_edit_host(window, cx));
+                                },
+                            ),
+                        )),
+                )
+        });
+    }
+
+    /// Validates the Edit dialog like Add does. Unsaved hosts change in
+    /// place; saved ones are rewritten in the OS credential store first and
+    /// update the list once `host_store` reports back.
+    fn submit_edit_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(from) = self.edit_host_from.clone() else { return; };
+        let Some(index) = self.hosts.iter().position(|host| host.address == from) else { return; };
+        if self.sessions.get(&from).is_some_and(|s| s.terminal.busy()) {
+            window.push_notification(self.t().edit_host_disconnect_first, cx);
+            return;
+        }
+        let form = HostForm {
+            name: self.edit_host_name.read(cx).value().to_string(),
+            address: self.edit_host_address.read(cx).value().to_string(),
+            user: self.edit_host_user.read(cx).value().to_string(),
+            port: self.edit_host_port.read(cx).value().to_string(),
+            key_auth: self.edit_host_key_auth,
+        };
+        let host = match form.host() {
+            Ok(host) => host,
+            Err(error) => { window.push_notification(error, cx); return; }
+        };
+        if host.address != from && self.hosts.iter().any(|existing| existing.address == host.address) {
+            window.push_notification(i18n::host_already_exists(self.lang), cx);
+            return;
+        }
+        if self.hosts[index].saved {
+            if let Err(error) = self.host_store.update(from, host) {
+                window.push_notification(error.to_string(), cx);
+            }
+        } else {
+            self.apply_host_edit(&from, host);
+            window.push_notification(self.t().edit_host_done, cx);
+        }
+        self.edit_host_from = None;
         cx.notify();
     }
 
@@ -785,8 +1043,8 @@ impl AwanApp {
                     menu = menu.child(
                         SidebarMenuItem::new(page.title(lang))
                             .pl(px(20.))
-                            // The Database Browser is reached from Docker, so Docker stays highlighted.
-                            .active(is_active && (self.page == page || (page == Page::Docker && self.page == Page::DbBrowser)))
+                            // The Database Browser and Stalwart Setup are reached from Docker, so Docker stays highlighted.
+                            .active(is_active && (self.page == page || (page == Page::Docker && matches!(self.page, Page::DbBrowser | Page::Stalwart))))
                             .on_click(cx.listener(move |this, _, window, cx| { this.switch_to(index, page, window, cx); cx.notify(); })),
                     );
                 }
@@ -796,13 +1054,24 @@ impl AwanApp {
             menu = menu.child(SidebarMenuItem::new(t.sidebar_no_server));
         }
 
-        let auto_refresh_dot = div().w(px(8.)).h(px(8.)).rounded(px(4.))
-            .bg(if self.live_auto_refresh { cx.theme().green } else { cx.theme().red });
-        let auto_refresh_row = h_flex().id("sidebar-auto-refresh").gap_2().items_center().cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| { this.live_auto_refresh = !this.live_auto_refresh; cx.notify(); }))
-            .child(auto_refresh_dot)
-            .child(div().text_xs().text_color(cx.theme().muted_foreground)
-                .child(if self.live_auto_refresh { t.live_auto_refresh_on } else { t.live_auto_refresh_off }));
+        // A hand-made toggle rather than gpui-component's `Switch`, whose
+        // off state is always the theme's grey: here off is red, on green.
+        let auto_refresh_color = if self.live_auto_refresh { cx.theme().green } else { cx.theme().red };
+        let auto_refresh_toggle = h_flex().flex_none().w(px(34.)).h(px(18.)).p(px(2.)).rounded(px(9.))
+            .bg(auto_refresh_color)
+            .when(self.live_auto_refresh, |track| track.justify_end())
+            .child(div().size(px(14.)).rounded(px(7.)).bg(white()));
+        let auto_refresh_row = h_flex().id("sidebar-auto-refresh").w_full().gap_2().items_center().justify_between().cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.live_auto_refresh = !this.live_auto_refresh;
+                if this.live_auto_refresh {
+                    this.poll_live_page(cx);
+                }
+                cx.notify();
+            }))
+            .child(div().text_xs().font_semibold().text_color(auto_refresh_color)
+                .child(if self.live_auto_refresh { t.live_auto_refresh_on } else { t.live_auto_refresh_off }))
+            .child(auto_refresh_toggle);
 
         let sidebar = Sidebar::new("sidebar")
             .w(px(220.))
@@ -818,7 +1087,7 @@ impl AwanApp {
                     Button::new("sidebar-settings").small().ghost()
                         .icon(IconName::Settings)
                         .tooltip(t.sidebar_settings_tooltip)
-                        .selected(self.page == Page::Settings)
+                        .selected(matches!(self.page, Page::Settings | Page::About))
                         .on_click(cx.listener(|this, _, _, cx| { this.page = Page::Settings; cx.notify(); })),
                 ),
             );
@@ -853,6 +1122,8 @@ impl AwanApp {
                     Page::Firewall => self.render_firewall(cx),
                     Page::Tools => self.render_tools(cx),
                     Page::Settings => self.render_settings(cx),
+                    Page::About => self.render_about(cx),
+                    Page::Stalwart => self.render_stalwart(cx),
                     Page::Terminal | Page::Editor | Page::Docker | Page::DbBrowser => unreachable!(),
                 };
                 div().flex_1().min_h_0().size_full().overflow_y_scrollbar().child(content).into_any_element()
@@ -890,55 +1161,211 @@ impl AwanApp {
     }
 
     fn render_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::component::{Theme, ThemeMode};
         let t = self.t();
-        let muted = cx.theme().muted_foreground;
-        let mode = cx.theme().mode;
-        let mut language_row = h_flex().gap_2();
-        for option in Language::ALL {
-            language_row = language_row.child(
-                Button::new(SharedString::from(format!("lang-{}", option.label()))).small().label(option.label())
-                    .selected(self.lang == option)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.lang = option;
-                        option.persist();
-                        cx.notify();
-                    })),
+        let lang = self.lang;
+        let theme = cx.theme();
+        let (muted, border, primary, blue, green, cyan, red, hover) = (theme.muted_foreground, theme.border, theme.primary, theme.blue, theme.green, theme.cyan, theme.red, theme.list_hover);
+        let mode = theme.mode;
+        let check = |selected: bool| -> AnyElement {
+            if selected {
+                Icon::new(Lucide::CircleCheck).text_color(primary).into_any_element()
+            } else {
+                div().size(px(16.)).flex_none().rounded_full().border_1().border_color(border).into_any_element()
+            }
+        };
+
+        // Theme: a small picture of the app in each theme, picked by clicking it.
+        let mut themes = h_flex().w_full().gap_3().flex_wrap();
+        for (index, (option, label, desc, icon)) in [
+            (ThemeMode::Light, t.settings_theme_light, t.settings_theme_light_desc, Lucide::Sun),
+            (ThemeMode::Dark, t.settings_theme_dark, t.settings_theme_dark_desc, Lucide::Moon),
+        ].into_iter().enumerate() {
+            let selected = mode == option;
+            let hex = |value: u32| -> Hsla { rgb(value).into() };
+            let (bg, side, line) = if option == ThemeMode::Dark { (hex(0x18181B), hex(0x27272A), hex(0x3F3F46)) } else { (hex(0xFFFFFF), hex(0xF4F4F5), hex(0xE4E4E7)) };
+            let bar = |width: f32, height: f32, color: Hsla| div().w(px(width)).h(px(height)).flex_none().rounded(px(height / 2.)).bg(color);
+            let preview = h_flex().w_full().h(px(96.)).rounded(px(8.)).overflow_hidden().border_1().border_color(line).bg(bg)
+                .child(v_flex().w(px(46.)).h_full().p(px(7.)).gap(px(6.)).bg(side)
+                    .child(bar(24., 6., blue))
+                    .child(bar(32., 4., line)).child(bar(28., 4., line)).child(bar(20., 4., line)))
+                .child(v_flex().flex_1().p(px(9.)).gap(px(7.))
+                    .child(bar(70., 6., line))
+                    .child(h_flex().gap(px(6.))
+                        .child(v_flex().flex_1().h(px(30.)).p(px(5.)).gap(px(4.)).rounded(px(5.)).border_1().border_color(line)
+                            .child(bar(20., 4., green)).child(bar(34., 4., line)))
+                        .child(v_flex().flex_1().h(px(30.)).p(px(5.)).gap(px(4.)).rounded(px(5.)).border_1().border_color(line)
+                            .child(bar(20., 4., blue)).child(bar(28., 4., line))))
+                    .child(bar(90., 4., line)));
+            themes = themes.child(
+                v_flex().id(("settings-theme", index)).flex_1().min_w(px(220.)).max_w(px(320.)).p_2().gap_2()
+                    .rounded(px(12.)).border_2().border_color(if selected { primary } else { border })
+                    .when(selected, |tile| tile.bg(primary.opacity(0.04)))
+                    .cursor_pointer().hover(move |style| style.bg(hover))
+                    .on_click(cx.listener(move |_, _, window, cx| { Theme::change(option, Some(window), cx); cx.notify(); }))
+                    .child(preview)
+                    .child(h_flex().px_1().gap_2().items_center()
+                        .child(Icon::new(icon).small().text_color(muted))
+                        .child(v_flex().flex_1().min_w_0()
+                            .child(div().text_sm().font_semibold().child(label))
+                            .child(div().text_xs().text_color(muted).child(desc)))
+                        .child(check(selected))),
             );
         }
-        v_flex().w_full().p_4().gap_4()
-            .child(div().text_lg().font_bold().child(t.settings_title))
-            .child(
-                v_flex().gap_2()
-                    .child(div().font_bold().child(t.settings_appearance_heading))
-                    .child(div().text_color(muted).child(t.settings_appearance_desc))
+
+        // Language: one row per language in a single card.
+        let mut languages = v_flex().w_full().max_w(px(652.)).rounded(px(12.)).border_1().border_color(border).overflow_hidden();
+        for (index, option) in Language::ALL.into_iter().enumerate() {
+            let selected = lang == option;
+            languages = languages.child(
+                h_flex().id(("settings-lang", index)).w_full().gap_3().items_center().px_4().py_3()
+                    .when(index > 0, |row| row.border_t_1().border_color(border))
+                    .when(selected, |row| row.bg(primary.opacity(0.04)))
+                    .cursor_pointer().hover(move |style| style.bg(hover))
+                    .on_click(cx.listener(move |this, _, _, cx| { this.lang = option; option.persist(); cx.notify(); }))
                     .child(
-                        h_flex().gap_2()
-                            .child(Button::new("theme-light").small().label(t.settings_theme_light)
-                                .selected(mode == gpui_kit::component::ThemeMode::Light)
-                                .on_click(cx.listener(|_, _, window, cx| {
-                                    gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Light, Some(window), cx);
-                                    cx.notify();
-                                })))
-                            .child(Button::new("theme-dark").small().label(t.settings_theme_dark)
-                                .selected(mode == gpui_kit::component::ThemeMode::Dark)
-                                .on_click(cx.listener(|_, _, window, cx| {
-                                    gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, Some(window), cx);
-                                    cx.notify();
-                                }))),
-                    ),
-            )
-            .child(
-                v_flex().gap_2()
-                    .child(div().font_bold().child(t.settings_language_heading))
-                    .child(div().text_color(muted).child(t.settings_language_desc))
-                    .child(language_row),
-            )
-            .child(
-                v_flex().gap_1()
-                    .child(div().font_bold().child(t.settings_about_heading))
-                    .child(div().text_color(muted).child(t.settings_about_text)),
-            )
-            .into_any_element()
+                        div().w(px(32.)).h(px(22.)).flex_none().rounded(px(4.)).border_1().border_color(border)
+                            .overflow_hidden().flex().items_center().justify_center().bg(theme.background)
+                            .child(img(option.flag_asset_path()).size_full())
+                    )
+                    .child(
+                        h_flex().flex_1().gap_2().items_center()
+                            .child(div().text_sm().font_medium().child(option.label()))
+                            .child(div().text_xs().text_color(muted).child(format!("({})", option.code().to_uppercase())))
+                    )
+                    .child(check(selected)),
+            );
+        }
+
+        let awan_apps = h_flex().id("settings-awan-apps").w_full().max_w(px(652.)).gap_3().items_center().px_4().py_3()
+            .rounded(px(12.)).border_1().border_color(border)
+            .cursor_pointer().hover(move |style| style.bg(hover))
+            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("https://apps.awandigitals.com").build(window, cx))
+            .on_click(|_, _, cx| cx.open_url("https://apps.awandigitals.com"))
+            .child(icon_tile(Lucide::LayoutGrid, cyan, 32.))
+            .child(v_flex().flex_1().min_w_0()
+                .child(h_flex().gap_2().items_center()
+                    .child(div().text_sm().font_medium().child("Awan Apps"))
+                    .child(Tag::secondary().small().child("apps.awandigitals.com")))
+                .child(div().text_xs().text_color(muted).child(t.settings_awan_apps_desc)))
+            .child(Icon::new(Lucide::ExternalLink).small().text_color(muted));
+
+        let contribute = h_flex().id("settings-contribute").w_full().max_w(px(652.)).gap_3().items_center().px_4().py_3()
+            .rounded(px(12.)).border_1().border_color(border)
+            .cursor_pointer().hover(move |style| style.bg(hover))
+            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("https://contribute.awandigitals.com").build(window, cx))
+            .on_click(|_, _, cx| cx.open_url("https://contribute.awandigitals.com"))
+            .child(icon_tile(Lucide::Heart, red, 32.))
+            .child(v_flex().flex_1().min_w_0()
+                .child(h_flex().gap_2().items_center()
+                    .child(div().text_sm().font_medium().child("Contribute"))
+                    .child(Tag::secondary().small().child("contribute.awandigitals.com")))
+                .child(div().text_xs().text_color(muted).child(t.settings_contribute_desc)))
+            .child(Icon::new(Lucide::ExternalLink).small().text_color(muted));
+
+        let about = h_flex().id("settings-about").w_full().max_w(px(652.)).gap_3().items_center().px_4().py_3()
+            .rounded(px(12.)).border_1().border_color(border)
+            .cursor_pointer().hover(move |style| style.bg(hover))
+            .on_click(cx.listener(|this, _, _, cx| { this.page = Page::About; cx.notify(); }))
+            .child(icon_tile(Lucide::Info, primary, 32.))
+            .child(v_flex().flex_1().min_w_0()
+                .child(div().text_sm().font_medium().child(t.settings_about_open))
+                .child(div().text_xs().text_color(muted).child(i18n::about_version(lang, env!("CARGO_PKG_VERSION")))))
+            .child(Icon::new(Lucide::ChevronRight).small().text_color(muted));
+
+        let info_items = v_flex().w_full().max_w(px(652.)).gap_2p5()
+            .child(awan_apps)
+            .child(contribute)
+            .child(about);
+
+        h_flex().w_full().justify_center().child(
+            v_flex().w_full().max_w(px(860.)).p_6().gap_8()
+                .child(settings_section(Lucide::Palette, primary, t.settings_appearance_heading, t.settings_appearance_desc, muted, themes))
+                .child(settings_section(Lucide::Languages, blue, t.settings_language_heading, t.settings_language_desc, muted, languages))
+                .child(settings_section(Lucide::Info, green, t.settings_info_heading, t.settings_info_desc, muted, info_items)),
+        ).into_any_element()
+    }
+
+    fn render_about(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.t();
+        let theme = cx.theme();
+        let (muted, border, background) = (theme.muted_foreground, theme.border, theme.background);
+        let (blue, cyan, green, yellow, red, primary) = (theme.blue, theme.cyan, theme.green, theme.yellow, theme.red, theme.primary);
+        let version = env!("CARGO_PKG_VERSION");
+        let pill = |text: String| div().px_2().py_0p5().rounded_full().bg(white().opacity(0.2)).text_xs().font_medium().text_color(white()).child(text);
+
+        let hero = h_flex().w_full().gap_5().items_center().p_6().rounded(px(16.))
+            .bg(linear_gradient(135., linear_color_stop(blue, 0.), linear_color_stop(cyan, 1.)))
+            .child(div().size(px(76.)).flex_none().rounded(px(20.)).bg(white().opacity(0.18)).border_1().border_color(white().opacity(0.35))
+                .flex().items_center().justify_center()
+                .child(Icon::new(Lucide::Cloud).size(px(42.)).text_color(white())))
+            .child(v_flex().flex_1().min_w_0().gap_1()
+                .child(div().text_2xl().font_bold().text_color(white()).child("Awan Host Manager"))
+                .child(div().text_sm().text_color(white().opacity(0.9)).child(t.settings_about_text))
+                .child(h_flex().pt_1().gap_2().flex_wrap()
+                    .child(pill(i18n::about_version(self.lang, version)))
+                    .child(pill(format!("{} · {}", std::env::consts::OS, std::env::consts::ARCH)))));
+
+        let mut features = h_flex().w_full().gap_3().flex_wrap();
+        for (icon, color, title, desc) in [
+            (Lucide::Gauge, green, "Summary", t.about_feature_summary),
+            (Lucide::SquareTerminal, blue, "Terminal", t.about_feature_terminal),
+            (Lucide::FileCode, yellow, "File Editor", t.about_feature_editor),
+            (Lucide::Container, cyan, "Docker", t.about_feature_docker),
+            (Lucide::Shield, red, "Firewall", t.about_feature_firewall),
+            (Lucide::Package, primary, "Applications", t.about_feature_apps),
+        ] {
+            features = features.child(
+                v_flex().flex_1().min_w(px(240.)).p_4().gap_2().rounded(px(12.)).border_1().border_color(border).bg(background)
+                    .child(h_flex().gap_2().items_center()
+                        .child(icon_tile(icon, color, 30.))
+                        .child(div().text_sm().font_semibold().child(title)))
+                    .child(div().text_xs().text_color(muted).child(desc)),
+            );
+        }
+
+        let mut security = v_flex().w_full().rounded(px(12.)).border_1().border_color(border).overflow_hidden();
+        for (index, (icon, text)) in [
+            (Lucide::KeyRound, t.about_security_keyring),
+            (Lucide::ShieldCheck, t.about_security_hostkey),
+            (Lucide::TriangleAlert, t.about_security_confirm),
+        ].into_iter().enumerate() {
+            security = security.child(
+                h_flex().w_full().gap_3().items_center().px_4().py_3()
+                    .when(index > 0, |row| row.border_t_1().border_color(border))
+                    .child(icon_tile(icon, green, 28.))
+                    .child(div().flex_1().min_w_0().text_sm().child(text)),
+            );
+        }
+
+        let mut stack = h_flex().gap_2().flex_wrap();
+        for name in ["Rust", "GPUI", "gpui-component", "Tokio", "russh", "alacritty_terminal"] {
+            stack = stack.child(Tag::secondary().child(name));
+        }
+
+        h_flex().w_full().justify_center().child(
+            v_flex().w_full().max_w(px(860.)).p_6().gap_6()
+                .child(
+                    h_flex().w_full().items_center().justify_between()
+                        .child(Button::new("about-back").small().ghost().icon(Lucide::ChevronLeft).label(t.about_back)
+                            .on_click(cx.listener(|this, _, _, cx| { this.page = Page::Settings; cx.notify(); })))
+                        .child(Button::new("about-company").small().outline().icon(Lucide::Globe).label("Company")
+                            .tooltip("https://company.awandigitals.com")
+                            .on_click(|_, _, cx| cx.open_url("https://company.awandigitals.com")))
+                )
+                .child(hero)
+                .child(v_flex().gap_3().child(div().font_semibold().child(t.about_features_heading)).child(features))
+                .child(v_flex().gap_3().child(div().font_semibold().child(t.about_security_heading)).child(security))
+                .child(v_flex().gap_3().child(div().font_semibold().child(t.about_built_with)).child(stack))
+                .child(
+                    v_flex().w_full().pt_2().gap_2().items_center().justify_center()
+                        .child(
+                            Button::new("about-company-footer").small().ghost().icon(Lucide::ExternalLink).label("company.awandigitals.com")
+                                .on_click(|_, _, cx| cx.open_url("https://company.awandigitals.com"))
+                        )
+                        .child(div().text_xs().text_color(muted).child(format!("Awan Host Manager {version}")))
+                ),
+        ).into_any_element()
     }
 
     fn render_hosts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -959,16 +1386,9 @@ impl AwanApp {
             // place that progress or a failure is visible — show it here.
             let connecting = session.filter(|s| s.terminal.busy() && !s.terminal.connected).map(|s| s.terminal.status.clone());
             let error = session.filter(|s| !s.terminal.busy() && !s.terminal.connected).and_then(|s| s.terminal.error.clone());
-            let connect_button = if live {
-                solid_danger(Button::new(("host-connect", index)).small()).label(t.terminal_disconnect)
-                    .on_click(cx.listener({
-                        let address = host.address.clone();
-                        move |this, _, _, cx| { this.disconnect_host(&address); cx.notify(); }
-                    }))
-            } else {
-                Button::new(("host-connect", index)).small().label(if host.saved { t.hosts_connect } else { t.hosts_fill_login })
-                    .on_click(cx.listener(move |this, _, window, cx| this.select_host(index, window, cx)))
-            };
+            // While a saved profile is being rewritten (or deleted), its row
+            // waits so a connect can't read the profile mid-change.
+            let store_busy = host.saved && self.host_store.busy;
             let mut info = v_flex().flex_1().gap_1()
                 .child(div().font_bold().child(host.name.clone()))
                 .child(div().text_xs().text_color(cx.theme().muted_foreground)
@@ -981,14 +1401,30 @@ impl AwanApp {
             if let Some(error) = error {
                 info = info.child(div().text_xs().text_color(cx.theme().red).child(error));
             }
-            list = list.child(
-                h_flex().gap_3().items_center().p_3().rounded(cx.theme().radius)
-                    .border_1().border_color(cx.theme().border)
-                    .child(info)
-                    .child(connect_button)
+            let mut row = h_flex().gap_3().items_center().p_3().rounded(cx.theme().radius)
+                .border_1().border_color(cx.theme().border)
+                .child(info);
+            // Connected (or connecting): only Disconnect. Editing or deleting
+            // a host with a live session would pull it out from under it.
+            if live {
+                row = row.child(solid_danger(Button::new(("host-connect", index)).small()).label(t.terminal_disconnect)
+                    .on_click(cx.listener({
+                        let address = host.address.clone();
+                        move |this, _, _, cx| { this.disconnect_host(&address); cx.notify(); }
+                    })));
+            } else {
+                row = row
+                    .child(Button::new(("host-connect", index)).small().label(if host.saved { t.hosts_connect } else { t.hosts_fill_login })
+                        .disabled(store_busy)
+                        .on_click(cx.listener(move |this, _, window, cx| this.select_host(index, window, cx))))
+                    .child(Button::new(("host-edit", index)).small().label(t.hosts_edit)
+                        .disabled(store_busy)
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_edit_host_dialog(index, window, cx))))
                     .child(solid_danger(Button::new(("host-delete", index)).small()).label(t.hosts_delete)
-                        .on_click(cx.listener(move |this, _, window, cx| this.confirm_delete_host(index, window, cx)))),
-            );
+                        .disabled(store_busy)
+                        .on_click(cx.listener(move |this, _, window, cx| this.confirm_delete_host(index, window, cx))));
+            }
+            list = list.child(row);
         }
         let _ = (window,);
         v_flex().w_full().p_4().gap_3()
@@ -1096,7 +1532,191 @@ impl AwanApp {
         )
     }
 
-    fn render_summary(&self, cx: &Context<Self>) -> AnyElement {
+    /// Summary's CPU/RAM chart: the app's own 5 s samples for `Range::Live`,
+    /// or sysstat's archive on the server for 24 h / 7 d / 30 d — with an
+    /// Install/Enable sysstat action when the server has nothing recorded.
+    fn render_history_card(&self, muted: Hsla, radius: Pixels, border: Hsla, cpu_color: Hsla, can_manage: bool, cx: &Context<Self>) -> AnyElement {
+        use crate::live::{Kind, Range, Request};
+        let t = self.t();
+        let lang = self.lang;
+        let live = &self.terminal().live;
+        let range = live.range;
+        let memory_color = cx.theme().chart_2;
+        // Dates are shown in the server's zone for archive ranges (24 jam, 7 hari).
+        let utc_offset = if range == Range::Live {
+            None
+        } else {
+            Some(live.data[Kind::History.index()].as_ref().and_then(|report| report.value("utc_offset").parse::<i64>().ok())
+                .or_else(|| live.data[Kind::Summary.index()].as_ref().and_then(|report| report.value("utc_offset").parse::<i64>().ok()))
+                .unwrap_or(0))
+        };
+
+        let mut range_row = h_flex().gap_1().items_center();
+        for (index, option) in Range::ALL.into_iter().enumerate() {
+            let label = match option {
+                Range::Live => t.summary_range_live,
+                Range::Day => t.summary_range_day,
+                Range::Week => t.summary_range_week,
+            };
+            range_row = range_row.child(Button::new(("history-range", index)).small().label(label).selected(range == option)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let terminal = this.terminal_mut();
+                    terminal.live.set_range(option);
+                    if option != Range::Live { terminal.request_live(Request::history(option)); }
+                    cx.notify();
+                })));
+        }
+        if range != Range::Live {
+            range_row = range_row.child(Button::new("history-reload").small().ghost().label(t.live_reload)
+                .disabled(live.busy == Some(Kind::History))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let terminal = this.terminal_mut();
+                    terminal.live.set_range(range);
+                    terminal.request_live(Request::history(range));
+                    cx.notify();
+                })));
+        }
+
+        // (seconds ago, cpu %, memory %), oldest first, from either source.
+        let points: Vec<(u64, f64, f64)> = if range == Range::Live {
+            live.history.iter().map(|s| (s.at.elapsed().as_secs(), s.cpu, s.memory)).collect()
+        } else {
+            let read_ago = live.checked[Kind::History.index()].map_or(0, |at| at.elapsed().as_secs());
+            live.archive.iter().map(|p| (p.ago + read_ago, p.cpu, p.memory)).collect()
+        };
+        let latest = points.last().copied();
+        let legend = |color: Hsla, name: &str, value: Option<f64>| {
+            h_flex().gap_1().items_center().text_xs()
+                .child(div().size(px(8.)).rounded_full().bg(color))
+                .child(div().text_color(muted).child(name.to_string()))
+                .child(div().font_bold().child(value.map(|v| format!("{v:.1}%")).unwrap_or_else(|| "—".into())))
+        };
+        let note = if range == Range::Live { t.summary_history_note } else { t.summary_archive_note };
+        let mut card = v_flex().gap_2().p_3().rounded(radius).border_1().border_color(border)
+            .child(
+                h_flex().gap_3().items_center().justify_between().flex_wrap()
+                    .child(v_flex()
+                        .child(div().text_sm().font_bold().child(t.summary_history_heading))
+                        .child(div().text_xs().text_color(muted).child(note)))
+                    .child(h_flex().gap_3().items_center().flex_wrap()
+                        .child(legend(cpu_color, t.summary_cpu_series, latest.map(|p| p.1)))
+                        .child(legend(memory_color, t.summary_memory_series, latest.map(|p| p.2)))
+                        .child(range_row)),
+            );
+
+        let placeholder = |content: AnyElement| div().h(px(160.)).flex().items_center().justify_center().px_4().text_xs().text_color(muted).child(content);
+        let chart = |points: Vec<(u64, f64, f64)>| {
+            let area = |color: Hsla| linear_gradient(180., linear_color_stop(color.opacity(0.35), 0.), linear_color_stop(color.opacity(0.02), 1.));
+            let mut chart = AreaChart::new(points.into_iter().enumerate())
+                .appear_key(range.seconds())
+                .x(|(i, _)| i.to_string())
+                .y(|(_, p)| p.1).stroke(cpu_color).fill(area(cpu_color)).natural().name(t.summary_cpu_series)
+                .y(|(_, p)| p.2).stroke(memory_color).fill(area(memory_color)).natural().name(t.summary_memory_series)
+                .y_domain(0.0, 100.0)
+                .y_axis(true)
+                .y_tick_count(5)
+                .y_tick_format(|v| format!("{v:.0}%"))
+                .x_axis(false)
+                .tooltip_title(move |(_, p)| i18n::time_ago(lang, p.0, utc_offset).into())
+                .tooltip_value(|_, _, v| format!("{v:.1}%").into());
+            if range == Range::Live { chart = chart.point_count(crate::live::HISTORY_LEN); }
+            div().h(px(160.)).w_full().child(chart)
+        };
+
+        if range == Range::Live {
+            let body = if points.len() < 2 { placeholder(t.summary_history_waiting.into_any_element()) } else { chart(points) };
+            return card.child(body).into_any_element();
+        }
+
+        let index = Kind::History.index();
+        let (yellow, red) = (cx.theme().yellow, cx.theme().red);
+        if let Some(error) = &live.errors[index] {
+            return card.child(placeholder(div().text_color(red).child(error.clone()).into_any_element())).into_any_element();
+        }
+        let Some(report) = &live.data[index] else {
+            return card.child(placeholder(h_flex().gap_2().items_center()
+                .child(Spinner::new().small().color(muted))
+                .child(t.summary_archive_reading)
+                .into_any_element())).into_any_element();
+        };
+
+        let status = report.value("sysstat");
+        let setup_running = self.terminal().update_running && self.terminal().task_title == crate::packages::Maintenance::Sysstat.title();
+        if status == "missing" || status == "inactive" {
+            let install = status == "missing";
+            let message = if install { t.summary_sysstat_missing } else { t.summary_sysstat_inactive };
+            let mut setup = v_flex().gap_2().items_center().max_w(px(560.))
+                .child(div().text_center().child(message))
+                .child(Button::new("history-sysstat").small().primary()
+                    .label(if install { t.summary_sysstat_install } else { t.summary_sysstat_enable })
+                    .disabled(!can_manage)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_sysstat(install, window, cx))));
+            if setup_running {
+                setup = setup.child(i18n::maintenance_running(lang, &self.terminal().task_title));
+            }
+            // An inactive install may still hold older samples worth showing.
+            if install || points.len() < 2 {
+                return card.child(placeholder(setup.into_any_element())).into_any_element();
+            }
+            card = card.child(div().text_xs().text_color(yellow).child(message))
+                .child(Button::new("history-sysstat").small().primary().label(t.summary_sysstat_enable).disabled(!can_manage)
+                    .on_click(cx.listener(|this, _, window, cx| this.confirm_sysstat(false, window, cx))));
+        } else if status == "waiting" && points.len() < 2 {
+            return card.child(placeholder(t.summary_sysstat_waiting.into_any_element())).into_any_element();
+        }
+
+        if points.len() < 2 {
+            card = card.child(placeholder(t.summary_archive_empty.into_any_element()));
+        } else {
+            let stats = |values: Vec<f64>| {
+                let peak = values.iter().copied().fold(0.0, f64::max);
+                i18n::archive_stats(lang, values.iter().sum::<f64>() / values.len() as f64, peak)
+            };
+            let cpu_stats = stats(points.iter().map(|p| p.1).collect());
+            let memory_stats = stats(points.iter().map(|p| p.2).collect());
+            let oldest = points[0].0;
+            card = card.child(chart(points))
+                .child(h_flex().gap_4().flex_wrap().text_xs().text_color(muted)
+                    .child(format!("{} · {cpu_stats}", t.summary_cpu_series))
+                    .child(format!("{} · {memory_stats}", t.summary_memory_series)));
+            // Say so when the data covers noticeably less than the range
+            // (sysstat installed recently, or the server was off).
+            if (oldest as f64) < range.seconds() as f64 * 0.9 {
+                card = card.child(div().text_xs().text_color(muted).child(i18n::archive_since(lang, &i18n::time_ago(lang, oldest, utc_offset))));
+            }
+        }
+        if let Ok(days) = report.value("retention").parse::<u64>() {
+            if days * 86_400 < range.seconds() {
+                card = card.child(div().text_xs().text_color(yellow).child(i18n::archive_retention(lang, days)));
+            }
+        }
+        for row in report.rows.iter().filter(|row| row.first().is_some_and(|key| key == "history_error")) {
+            card = card.child(div().text_xs().text_color(yellow).child(row.join(": ")));
+        }
+        card.into_any_element()
+    }
+
+    fn confirm_sysstat(&mut self, install: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.active_host().cloned() else { return; };
+        let t = self.t();
+        self.confirm_maintenance(
+            if install { t.summary_sysstat_install_title } else { t.summary_sysstat_enable_title },
+            i18n::sysstat_confirm_desc(self.lang, &host.name, &host.user, &host.address, host.port),
+            if install { t.summary_sysstat_install } else { t.summary_sysstat_enable },
+            false,
+            crate::packages::Maintenance::Sysstat,
+            window, cx,
+        );
+    }
+
+    fn render_summary(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.terminal().connected
+            && self.terminal().live.checked[crate::live::Kind::Summary.index()].is_none()
+            && self.terminal().live.busy.is_none()
+            && !self.terminal().update_running
+        {
+            self.terminal_mut().request_live(crate::live::Request::new(crate::live::Kind::Summary));
+        }
         let t = self.t();
         let lang = self.lang;
         let status = self.live_status_row(crate::live::Kind::Summary, cx);
@@ -1112,15 +1732,44 @@ impl AwanApp {
             .map(|s| i18n::uptime_value(lang, s / 86400, s / 3600 % 24, s / 60 % 60))
             .unwrap_or_else(|| t.not_available.into());
 
-        let metric = |label: &str, value: String, note: String| -> AnyElement {
-            v_flex().flex_1().gap_1().p_3().rounded(cx.theme().radius).border_1().border_color(cx.theme().border)
-                .child(div().text_xs().text_color(muted).child(label.to_string()))
-                .child(div().text_xl().font_bold().child(value))
-                .child(div().text_xs().text_color(muted).child(note))
+        let cpu_percent = report.value("cpu").parse::<f64>().ok().map(|v| v.clamp(0.0, 100.0));
+        let memory_percent = crate::live::percent(report.value("memory_used"), report.value("memory_total"));
+        let disk_percent = crate::live::percent(report.value("disk_used"), report.value("disk_total"));
+        let (radius, border) = (cx.theme().radius, cx.theme().border);
+        let (green, yellow, red) = (cx.theme().green, cx.theme().yellow, cx.theme().red);
+        let load_color = move |percent: f64| if percent >= 85.0 { red } else if percent >= 60.0 { yellow } else { green };
+
+        // The ring eases to each new reading (ProgressCircle's own value
+        // transition), so it only animates when a poll changes the value.
+        let metric = |id: &'static str, label: &str, percent: Option<f64>, value: String, note: String| -> AnyElement {
+            let color = percent.map(load_color).unwrap_or(muted);
+            h_flex().flex_1().min_w_0().gap_3().items_center().p_3().rounded(radius).border_1().border_color(border)
+                .bg(linear_gradient(135., linear_color_stop(color.opacity(0.10), 0.), linear_color_stop(color.opacity(0.0), 0.7)))
+                .child(
+                    ProgressCircle::new(id).value(percent.unwrap_or(0.0) as f32).color(color).size(px(64.)).flex_shrink_0()
+                        .child(div().text_xs().font_bold().text_color(color).child(percent.map(|p| format!("{p:.0}%")).unwrap_or_else(|| "—".into()))),
+                )
+                .child(
+                    v_flex().min_w_0().gap_1()
+                        .child(div().text_xs().text_color(muted).child(label.to_string()))
+                        .child(div().text_lg().font_bold().truncate().child(value))
+                        .child(div().text_xs().text_color(muted).truncate().child(note)),
+                )
                 .into_any_element()
         };
 
+        let history_card = self.render_history_card(muted, radius, border, green, can_manage, cx);
+
         let swap = capacity(report.value("swap_used"), report.value("swap_total"), t);
+        // The address SSH connected to is what reaches the server (a cloud
+        // VM's public IP is usually NAT'ed and missing from its interfaces);
+        // the interface IPs are listed next to it, without repeating it.
+        let connected_ip = self.active_host().map(|host| host.address.clone());
+        let network_ips: Vec<String> = report.rows.iter()
+            .find(|row| row.first().map(String::as_str) == Some("addresses"))
+            .and_then(|row| row.get(1))
+            .map(|value| value.split_whitespace().filter(|ip| Some(*ip) != connected_ip.as_deref()).map(str::to_owned).collect())
+            .unwrap_or_default();
 
         let mut errors = v_flex().gap_1();
         for row in &report.rows {
@@ -1139,26 +1788,32 @@ impl AwanApp {
                     .child(div().w(px(90.)).child(t.summary_disk_fstype))
                     .child(div().w(px(140.)).child(t.summary_disk_usage)),
             );
-        for row in &disk_rows {
+        for (index, row) in disk_rows.iter().enumerate() {
             if row.len() != 6 { continue; }
+            let percent = crate::live::percent(&row[4], &row[5]);
             disks = disks.child(
-                h_flex().gap_3().text_xs()
+                h_flex().gap_3().text_xs().items_center()
                     .child(div().flex_1().min_w_0().truncate().child(row[1].clone()))
                     .child(div().w(px(140.)).text_color(muted).truncate().child(row[2].clone()))
                     .child(div().w(px(90.)).text_color(muted).child(row[3].clone()))
-                    .child(div().w(px(140.)).child(capacity(&row[4], &row[5], t))),
+                    .child(v_flex().w(px(140.)).gap_1()
+                        .child(capacity(&row[4], &row[5], t))
+                        .children(percent.map(|p| Progress::new(("disk-usage", index)).value(p as f32).color(load_color(p)).h(px(4.))))),
             );
         }
 
         let mut content = v_flex().w_full().p_4().gap_3()
             .child(status)
             .child(h_flex().gap_3()
-                .child(metric(t.summary_cpu_usage, cpu, i18n::logical_cpus(lang, report.value("cores"))))
-                .child(metric(t.summary_memory, memory, t.summary_memory_note.into()))
-                .child(metric(t.summary_storage, disk, t.summary_storage_note.into())))
+                .child(metric("summary-cpu", t.summary_cpu_usage, cpu_percent, cpu, i18n::logical_cpus(lang, report.value("cores"))))
+                .child(metric("summary-memory", t.summary_memory, memory_percent, memory, t.summary_memory_note.into()))
+                .child(metric("summary-disk", t.summary_storage, disk_percent, disk, t.summary_storage_note.into())))
+            .child(history_card)
             .child(
                 v_flex().gap_2().p_3().rounded(cx.theme().radius).border_1().border_color(cx.theme().border)
                     .child(labeled_row(t.summary_hostname, report.value("hostname"), muted))
+                    .children(connected_ip.map(|ip| copy_values_row(t.summary_ip, vec![ip], t, muted)))
+                    .when(!network_ips.is_empty(), |card| card.child(copy_values_row(t.summary_network_ips, network_ips, t, muted)))
                     .child(labeled_row(t.summary_os, report.value("os"), muted))
                     .child(labeled_row(t.summary_kernel, report.value("kernel"), muted))
                     .child(labeled_row(t.summary_cpu_model, report.value("cpu_model"), muted))
@@ -1211,6 +1866,13 @@ impl AwanApp {
     }
 
     fn render_firewall(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.terminal().connected
+            && self.terminal().live.checked[crate::live::Kind::Ports.index()].is_none()
+            && self.terminal().live.busy.is_none()
+            && !self.terminal().update_running
+        {
+            self.terminal_mut().request_live(crate::live::Request::new(crate::live::Kind::Ports));
+        }
         let t = self.t();
         let lang = self.lang;
         let status = self.live_status_row(crate::live::Kind::Ports, cx);
@@ -1335,6 +1997,14 @@ impl AwanApp {
     }
 
     fn render_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.terminal().connected
+            && self.terminal().inventory.is_none()
+            && !self.terminal().inventory_scanning
+            && self.terminal().package_error.is_none()
+            && self.terminal().can_maintain()
+        {
+            self.terminal_mut().refresh_packages();
+        }
         let t = self.t();
         let lang = self.lang;
         let muted = cx.theme().muted_foreground;
@@ -1425,6 +2095,9 @@ impl AwanApp {
                 if manual {
                     card = card.child(div().text_xs().text_color(muted).child(t.tools_manual_detect_note));
                 }
+                if app == crate::packages::Software::Nginx && (!installed.is_empty() || manual) {
+                    card = card.child(self.render_nginx_sites(&inventory.nginx_sites, can_manage, cx));
+                }
                 list = list.child(card);
             }
             content = content.child(list);
@@ -1510,6 +2183,191 @@ impl AwanApp {
         );
     }
 
+    /// The Nginx card's Domains section: counts, search, Setup button, and a
+    /// virtualized table capped at `MAX_ROWS` high, so hundreds of domains
+    /// scroll inside the card instead of stretching the page.
+    fn render_nginx_sites(&self, sites: &[crate::packages::NginxSite], can_manage: bool, cx: &mut Context<Self>) -> AnyElement {
+        const ROW: f32 = 40.;
+        const MAX_ROWS: usize = 8;
+        const SEARCH_FROM: usize = 6;
+        let t = self.t();
+        let theme = cx.theme();
+        let (muted, border, green, yellow, chip_bg, radius) =
+            (theme.muted_foreground, theme.border, theme.green, theme.yellow, theme.muted, theme.radius);
+        let secure = sites.iter().filter(|site| site.https).count();
+        // A hidden search box must not keep filtering.
+        let searchable = sites.len() >= SEARCH_FROM;
+        let needle = if searchable { self.nginx_site_search.read(cx).value().trim().to_lowercase() } else { String::new() };
+        let rows: Vec<crate::packages::NginxSite> = sites.iter()
+            .filter(|site| needle.is_empty() || [&site.names, &site.targets, &site.file].iter().any(|field| field.to_lowercase().contains(&needle)))
+            .cloned().collect();
+
+        let dot = |color: Hsla, text: String| h_flex().gap_1p5().items_center()
+            .child(div().size(px(6.)).rounded(px(3.)).bg(color))
+            .child(text);
+        let header = h_flex().gap_3().items_center()
+            .child(h_flex().gap_2().items_center()
+                .child(div().text_sm().font_semibold().child(t.nginx_sites_heading))
+                .child(div().px_1p5().rounded(radius).bg(chip_bg).text_xs().text_color(muted).child(sites.len().to_string())))
+            .child(h_flex().gap_3().text_xs().text_color(muted)
+                .child(dot(green, format!("{secure} HTTPS")))
+                .child(dot(yellow, format!("{} HTTP", sites.len() - secure))))
+            .child(div().flex_1())
+            .when(searchable, |header| header.child(
+                div().w(px(240.)).child(Input::new(&self.nginx_site_search).small().cleanable(true)
+                    .prefix(Icon::new(Lucide::Search).small().text_color(muted))),
+            ))
+            .child(Button::new("nginx-setup-site").small().primary().icon(Lucide::ShieldCheck).label(t.nginx_setup_button).disabled(!can_manage)
+                .on_click(cx.listener(|this, _, window, cx| this.open_nginx_site_dialog(window, cx))));
+
+        let mut section = v_flex().gap_2().mt_1().pt_3().border_t_1().border_color(border).child(header);
+        if rows.is_empty() {
+            let text = if sites.is_empty() { t.nginx_sites_empty } else { t.nginx_sites_no_match };
+            return section.child(
+                h_flex().p_4().justify_center().rounded(radius).border_1().border_color(border)
+                    .child(icon_note(Lucide::Globe, muted, text)),
+            ).into_any_element();
+        }
+
+        let count = rows.len();
+        let rows = std::rc::Rc::new(rows);
+        let no_proxy = t.nginx_sites_no_proxy;
+        let hover = cx.theme().sidebar_accent;
+        let list = uniform_list("nginx-sites", count, move |range, _, _| {
+            range.filter_map(|ix| rows.get(ix).map(|site| (ix, site.clone()))).map(|(ix, site)| {
+                let (lock, color) = if site.https { (Lucide::Lock, green) } else { (Lucide::LockOpen, yellow) };
+                let mut names = site.names.split_whitespace();
+                let primary = names.next().unwrap_or_default().to_owned();
+                let extra = names.count();
+                let mut targets = site.targets.split_whitespace();
+                let target = match (targets.next(), targets.count()) {
+                    (None, _) => no_proxy.to_owned(),
+                    (Some(first), 0) => proxy_short(first).to_owned(),
+                    (Some(first), more) => format!("{} +{more}", proxy_short(first)),
+                };
+                let file = site.file.rsplit('/').next().unwrap_or(&site.file).to_owned();
+                let chip = |text: String| div().flex_none().px_1p5().rounded(radius).bg(chip_bg).text_xs().text_color(muted).child(text);
+                h_flex().w_full().h(px(ROW)).px_3().gap_3().items_center()
+                    .when(ix > 0, |row| row.border_t_1().border_color(border))
+                    .hover(move |style| style.bg(hover))
+                    .child(Icon::new(lock).small().text_color(color).flex_shrink_0())
+                    .child(h_flex().flex_1().min_w_0().gap_2().items_center()
+                        .child(div().min_w_0().truncate().text_sm().child(primary))
+                        .when(extra > 0, |name| name.child(chip(format!("+{extra}"))))
+                        .when(site.managed, |name| name.child(chip("Awan".into()))))
+                    // h_flex: the pill hugs its text, aligned in a fixed column.
+                    .child(h_flex().w(px(200.)).flex_shrink_0().child(
+                        div().min_w_0().px_2().py_0p5().rounded(radius).bg(chip_bg)
+                            .font_family("monospace").text_xs().truncate().child(target),
+                    ))
+                    .child(div().w(px(160.)).flex_shrink_0().text_xs().text_color(muted).truncate().child(file))
+            }).collect::<Vec<_>>()
+        })
+        .size_full()
+        .track_scroll(&self.nginx_site_scroll);
+        section = section.child(
+            div().w_full().rounded(radius).border_1().border_color(border).overflow_hidden().child(
+                div().relative().w_full().h(px(ROW * count.min(MAX_ROWS) as f32))
+                    .child(list)
+                    .vertical_scrollbar(&self.nginx_site_scroll),
+            ),
+        );
+        section.into_any_element()
+    }
+
+    /// Nginx reverse proxy + Let's Encrypt for an app already listening on
+    /// this server. The dialog doubles as the confirmation: it names the
+    /// target host and what will (and will not) change.
+    fn open_nginx_site_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.active_host().cloned() else { return; };
+        let domain = self.nginx_domain.clone();
+        let port = self.nginx_port.clone();
+        let email = self.nginx_email.clone();
+        // Not listed in full (it can be hundreds long): checked against what
+        // is typed, so only a domain or port already in use is called out.
+        let sites = self.terminal().inventory.as_ref().map(|inventory| inventory.nginx_sites.clone()).unwrap_or_default();
+        let t = self.t();
+        let lang = self.lang;
+        let entity = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let https = entity.read(cx).nginx_https;
+            let theme = cx.theme();
+            let (muted, yellow, chip_bg, radius) = (theme.muted_foreground, theme.yellow, theme.muted, theme.radius);
+            let typed_domain = domain.read(cx).value().trim().trim_end_matches('.').to_ascii_lowercase();
+            let domain_taken = (!typed_domain.is_empty()).then(|| sites.iter()
+                .find(|site| site.names.split_whitespace().any(|name| name == typed_domain))).flatten();
+            let typed_port = port.read(cx).value().trim().parse::<u16>().ok();
+            let port_taken = typed_port.and_then(|typed| sites.iter().find(|site| {
+                site.targets.split_whitespace().any(|target| proxy_port(target) == Some(typed))
+                    && !site.names.split_whitespace().any(|name| name == typed_domain)
+            }).map(|site| (typed, site)));
+            let entity_for_checkbox = entity.clone();
+            let entity_for_submit = entity.clone();
+            dialog
+                .title(t.nginx_setup_title)
+                .child(
+                    v_flex().gap_3()
+                        .child(
+                            h_flex().gap_2().items_center().px_3().py_2().rounded(radius).bg(chip_bg).text_xs()
+                                .child(Icon::new(Lucide::Server).small().text_color(muted))
+                                .child(div().text_color(muted).child(t.nginx_setup_target))
+                                .child(div().font_semibold().child(host.name.clone()))
+                                .child(div().flex_1().min_w_0().truncate().text_right().font_family("monospace").text_color(muted)
+                                    .child(format!("{}@{}:{}", host.user, host.address, host.port))),
+                        )
+                        .child(
+                            Form::new()
+                                .child(Field::new().label(t.nginx_field_domain).child(Input::new(&domain)))
+                                .child(Field::new().label(t.nginx_field_port).child(Input::new(&port)))
+                                .child(Field::new().label(t.nginx_field_email).child(Input::new(&email)))
+                                .child(Field::new().child(
+                                    Checkbox::new("nginx-https").label(t.nginx_https_checkbox).checked(https)
+                                        .on_change(move |value: &bool, _, cx| {
+                                            let value = *value;
+                                            entity_for_checkbox.update(cx, |this, cx| { this.nginx_https = value; cx.notify(); });
+                                        }),
+                                )),
+                        )
+                        .children(domain_taken.map(|site| icon_note(Lucide::CircleAlert, yellow, i18n::nginx_domain_taken(lang, &typed_domain, &site.file))))
+                        .children(port_taken.map(|(typed, site)| icon_note(Lucide::CircleAlert, yellow,
+                            i18n::nginx_port_taken(lang, typed, site.names.split_whitespace().next().unwrap_or_default()))))
+                        .child(icon_note(Lucide::Info, muted, t.nginx_setup_note)),
+                )
+                .footer(
+                    gpui_kit::component::dialog::DialogFooter::new()
+                        .gap_2()
+                        .child(gpui_kit::component::dialog::DialogClose::new().child(Button::new("nginx-setup-cancel").label(t.add_host_cancel)))
+                        .child(gpui_kit::component::dialog::DialogAction::new().child(
+                            Button::new("nginx-setup-submit").primary().icon(Lucide::ShieldCheck).label(t.nginx_setup_submit).on_click(
+                                move |_, window, cx| {
+                                    entity_for_submit.update(cx, |this, cx| this.submit_nginx_site(window, cx));
+                                },
+                            ),
+                        )),
+                )
+        });
+    }
+
+    fn submit_nginx_site(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let action = crate::packages::Maintenance::NginxSite {
+            domain: self.nginx_domain.read(cx).value().trim().trim_end_matches('.').to_ascii_lowercase(),
+            port: self.nginx_port.read(cx).value().trim().parse().unwrap_or(0),
+            email: self.nginx_email.read(cx).value().trim().to_string(),
+            https: self.nginx_https,
+        };
+        if let Err(error) = action.command() {
+            window.push_notification(error.to_string(), cx);
+            return;
+        }
+        if self.terminal_mut().start_maintenance(action) {
+            // Progress streams into the terminal panel, which starts closed.
+            self.terminal_footer_open = true;
+        } else {
+            window.push_notification(self.t().nginx_setup_busy, cx);
+        }
+        cx.notify();
+    }
+
     fn editor_host_string(&self) -> Option<String> {
         self.active_host().map(|host| format!("{}@[{}]:{}", host.user, host.address, host.port))
     }
@@ -1537,12 +2395,28 @@ impl AwanApp {
             Ok(Reply::Read { path, revision, text }) => {
                 let language = language_for_path(&path);
                 self.editor_path = path.clone();
-                self.editor_path_input.update(cx, |state, cx| state.set_value(path, window, cx));
+                self.editor_path_input.update(cx, |state, cx| state.set_value(path.clone(), window, cx));
                 self.editor_host = self.editor_pending_host.clone();
-                self.editor_original = text.clone();
+                let is_four_space_lang = path.ends_with(".rs")
+                    || path.ends_with(".go")
+                    || path.ends_with(".py")
+                    || path.ends_with(".c")
+                    || path.ends_with(".cpp")
+                    || path.ends_with(".h")
+                    || path.ends_with(".java");
+                let tab_replacement = if is_four_space_lang { "    " } else { "  " };
+                let display_text = if text.contains('\t') {
+                    text.replace('\t', tab_replacement)
+                } else {
+                    text
+                };
+                let indent_size = detect_indent_size(&display_text, if is_four_space_lang { 4 } else { 2 });
+                self.editor_original = display_text.clone();
                 self.editor_text.update(cx, |state, cx| {
-                    state.set_value(text, window, cx);
+                    state.set_value(display_text, window, cx);
                     state.set_highlighter(language, cx);
+                    state.set_indent_guides(true, window, cx);
+                    state.set_tab_size(gpui_kit::component::input::TabSize { tab_size: indent_size, hard_tabs: false }, cx);
                 });
                 self.editor_revision = Some(revision);
                 self.editor_message = Some(self.t().editor_opened_success.into());
@@ -1729,6 +2603,16 @@ impl AwanApp {
             }
             return;
         }
+        if let Ok(crate::remote_fs::Reply::Stat(info)) = &result {
+            if let Some(ui) = self.file_info_ui.as_mut() {
+                if ui.path == info.path {
+                    ui.loading = false;
+                    ui.info = Some(info.clone());
+                    cx.notify();
+                }
+            }
+            return;
+        }
         // A selected path that was just deleted/renamed (or sits inside one)
         // no longer exists; drop it so the toolbar doesn't target it.
         if let Ok(crate::remote_fs::Reply::Deleted { path } | crate::remote_fs::Reply::Renamed { from: path, .. }) = &result {
@@ -1738,8 +2622,39 @@ impl AwanApp {
             }
         }
         match result {
-            Ok(reply) => self.set_fs_info(i18n::fs_success_message(self.lang, &reply)),
-            Err(error) => self.set_fs_error(error),
+            Ok(reply) => {
+                self.fs_last_delete = None;
+                self.set_fs_info(i18n::fs_success_message(self.lang, &reply));
+            }
+            Err(error) => {
+                if let Some(ui) = self.file_info_ui.as_mut() {
+                    if ui.loading {
+                        ui.loading = false;
+                        ui.error = Some(error.clone());
+                        cx.notify();
+                        return;
+                    }
+                }
+                if let Some(pos) = error.find("PERMISSION_DENIED\t") {
+                    let payload = &error[pos + "PERMISSION_DENIED\t".len()..];
+                    let parts: Vec<&str> = payload.trim().split('\t').collect();
+                    if parts.len() >= 4 {
+                        let owner = parts[0].to_string();
+                        let user = parts[1].to_string();
+                        let path = parts[2].to_string();
+                        let is_dir = parts[3] == "1";
+                        self.prompt_sudo_delete(path, is_dir, owner, user, window, cx);
+                        return;
+                    }
+                }
+                if error.contains("password is required") || error.contains("terminal is required") {
+                    if let Some((path, _)) = self.fs_last_delete.take() {
+                        self.prompt_terminal_sudo_delete(path, window, cx);
+                        return;
+                    }
+                }
+                self.set_fs_error(error);
+            }
         }
         self.refresh_tree(window, cx);
     }
@@ -1904,12 +2819,62 @@ impl AwanApp {
                 .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     entity.update(cx, |this, cx| {
-                        let request = crate::remote_fs::Request::Delete { path: path.clone(), recursive: is_dir };
+                        this.fs_last_delete = Some((path.clone(), is_dir));
+                        let request = crate::remote_fs::Request::Delete { path: path.clone(), recursive: is_dir, sudo: false };
                         match this.terminal_mut().request_fs(request) {
                             Ok(()) => this.fs_message = None,
                             Err(error) => this.set_fs_error(error),
                         }
                         cx.notify();
+                    });
+                    true
+                })
+        });
+    }
+
+    fn prompt_sudo_delete(&mut self, path: String, is_dir: bool, owner: String, user: String, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let t = self.t();
+        let lang = self.lang;
+        self.fs_last_delete = Some((path.clone(), is_dir));
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .title(t.fs_delete_sudo_title)
+                .description(i18n::fs_delete_sudo_desc(lang, &path, &owner, &user, is_dir))
+                .confirm()
+                .ok_text(t.fs_delete_sudo_ok)
+                .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                .on_ok(move |_, _, cx| {
+                    entity.update(cx, |this, cx| {
+                        let request = crate::remote_fs::Request::Delete { path: path.clone(), recursive: is_dir, sudo: true };
+                        match this.terminal_mut().request_fs(request) {
+                            Ok(()) => this.fs_message = None,
+                            Err(error) => this.set_fs_error(error),
+                        }
+                        cx.notify();
+                    });
+                    true
+                })
+        });
+    }
+
+    fn prompt_terminal_sudo_delete(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let t = self.t();
+        let lang = self.lang;
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .title(t.fs_delete_sudo_terminal_title)
+                .description(i18n::fs_delete_sudo_terminal_desc(lang, &path))
+                .confirm()
+                .ok_text(t.fs_delete_sudo_terminal_ok)
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.run_in_terminal(format!("sudo rm -rf -- {}", shell_quote(&path)), window, cx);
                     });
                     true
                 })
@@ -2147,6 +3112,163 @@ impl AwanApp {
             Err(error) => self.set_fs_error(error),
         }
         cx.notify();
+    }
+
+    fn open_info_dialog(&mut self, path: String, is_dir: bool, current_mode: u32, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_info_ui = Some(FileInfoUi {
+            path: path.clone(),
+            is_dir,
+            current_mode,
+            loading: true,
+            error: None,
+            info: None,
+        });
+        if let Err(error) = self.terminal_mut().request_fs(crate::remote_fs::Request::Stat { path: path.clone() }) {
+            if let Some(ui) = self.file_info_ui.as_mut() {
+                ui.loading = false;
+                ui.error = Some(error);
+            }
+        }
+        let entity = cx.entity();
+        let t = self.t();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let app = entity.read(cx);
+            let Some(ui) = app.file_info_ui.as_ref() else {
+                return dialog.title(t.fs_info_title);
+            };
+            let theme = cx.theme();
+            let (muted, radius, border) = (theme.muted_foreground, theme.radius, theme.border);
+            let name = ui.path.rsplit('/').next().unwrap_or(&ui.path).to_string();
+            let is_dir = ui.is_dir;
+            let current_mode = ui.current_mode;
+            let path_for_chmod = ui.path.clone();
+            let path_for_terminal = ui.path.clone();
+
+            let title = if is_dir { t.fs_info_folder_title } else { t.fs_info_file_title };
+
+            let content: AnyElement = if let Some(error) = &ui.error {
+                notice_row(Lucide::TriangleAlert, theme.red, radius, error.clone()).into_any_element()
+            } else if let Some(info) = &ui.info {
+                let ext = info.name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+                let (type_icon, type_color) = if is_dir {
+                    (Lucide::Folder, theme.blue)
+                } else if info.kind == "Symbolic Link" {
+                    (Lucide::FileSymlink, theme.magenta)
+                } else {
+                    match ext.as_deref() {
+                        Some("txt" | "md" | "markdown" | "log" | "csv" | "tsv" | "rst") => (Lucide::FileText, muted),
+                        Some(_) => (Lucide::FileCode, theme.cyan),
+                        None => (Lucide::File, muted),
+                    }
+                };
+
+                let mut body = v_flex().gap_2p5();
+
+                // Header banner
+                let header = h_flex().gap_3().items_center().p_2().rounded(radius).bg(theme.muted.opacity(0.4))
+                    .child(
+                        div().size(px(38.)).rounded(radius).bg(theme.background).border_1().border_color(border)
+                            .flex().items_center().justify_center()
+                            .child(Icon::new(type_icon).size(px(20.)).text_color(type_color))
+                    )
+                    .child(
+                        v_flex().flex_1().min_w_0().gap_0p5()
+                            .child(
+                                h_flex().gap_2().items_center()
+                                    .child(div().text_sm().font_bold().truncate().child(info.name.clone()))
+                                    .child(Tag::secondary().small().child(info.kind.clone()))
+                            )
+                            .child(div().text_xs().font_family("monospace").text_color(muted).truncate().child(info.path.clone()))
+                    );
+                body = body.child(header);
+
+                // Section: Umum / General
+                let mut general = v_flex().w_full().gap_1().p_2().rounded(radius).border_1().border_color(border);
+                general = general.child(div().text_xs().font_bold().text_color(muted).child(t.fs_info_general));
+                general = general.child(info_detail_row(t.fs_info_name, info.name.clone(), false, muted));
+                general = general.child(info_detail_row(t.fs_info_path, info.path.clone(), true, muted));
+                general = general.child(info_detail_row(t.fs_info_kind, info.kind.clone(), false, muted));
+
+                if is_dir {
+                    if let Some(items) = &info.item_count {
+                        general = general.child(info_detail_row(t.fs_info_items, format!("{items} item"), false, muted));
+                    }
+                }
+                let size_str = format!("{} ({} byte)", format_bytes(info.size), format_thousands(info.size));
+                general = general.child(info_detail_row(t.fs_info_size, size_str, false, muted));
+
+                if info.blocks > 0 {
+                    let disk_usage = format!("{} blok (~{})", info.blocks, format_bytes(info.blocks * 512));
+                    general = general.child(info_detail_row(t.fs_info_blocks, disk_usage, false, muted));
+                }
+
+                if let Some(target) = &info.target {
+                    let target_status = if info.target_valid { "Valid" } else { "Broken / Tidak ditemukan" };
+                    general = general.child(info_detail_row(t.fs_info_target, format!("{target} ({target_status})"), true, muted));
+                }
+                body = body.child(general);
+
+                // Section: Kepemilikan & Izin / Ownership & Permissions
+                let mut perm = v_flex().w_full().gap_1().p_2().rounded(radius).border_1().border_color(border);
+                perm = perm.child(div().text_xs().font_bold().text_color(muted).child(t.fs_info_ownership));
+                perm = perm.child(info_detail_row(t.fs_info_owner, info.owner.clone(), false, muted));
+                perm = perm.child(info_detail_row(t.fs_info_group, info.group.clone(), false, muted));
+                perm = perm.child(info_detail_row(t.fs_info_permissions, format!("{}  ·  {}", info.mode_octal, info.permissions), true, muted));
+                body = body.child(perm);
+
+                // Section: Waktu & Tanggal / Timestamps
+                let mut times = v_flex().w_full().gap_1().p_2().rounded(radius).border_1().border_color(border);
+                times = times.child(div().text_xs().font_bold().text_color(muted).child(t.fs_info_timestamps));
+                if info.created != "-" && !info.created.is_empty() {
+                    times = times.child(info_detail_row(t.fs_info_created, info.created.clone(), false, muted));
+                }
+                times = times.child(info_detail_row(t.fs_info_modified, info.modified.clone(), false, muted));
+                times = times.child(info_detail_row(t.fs_info_changed, info.changed.clone(), false, muted));
+                times = times.child(info_detail_row(t.fs_info_accessed, info.accessed.clone(), false, muted));
+                body = body.child(times);
+
+                // Section: Detail Sistem File / Filesystem Inode
+                let mut fs_info = v_flex().w_full().gap_1().p_2().rounded(radius).border_1().border_color(border);
+                fs_info = fs_info.child(div().text_xs().font_bold().text_color(muted).child(t.fs_info_filesystem));
+                fs_info = fs_info.child(info_detail_row(t.fs_info_inode, info.inode.to_string(), true, muted));
+                fs_info = fs_info.child(info_detail_row(t.fs_info_links, info.links.to_string(), true, muted));
+                fs_info = fs_info.child(info_detail_row(t.fs_info_device, info.device.to_string(), true, muted));
+                body = body.child(fs_info);
+
+                body.into_any_element()
+            } else {
+                v_flex().py_10().items_center().justify_center().gap_3()
+                    .child(Spinner::new().color(muted))
+                    .child(div().text_sm().text_color(muted).child(t.fs_info_loading))
+                    .into_any_element()
+            };
+
+            let is_link = ui.info.as_ref().is_some_and(|i| i.kind == "Symbolic Link");
+            let chmod_entity = entity.clone();
+            let terminal_entity = entity.clone();
+
+            dialog
+                .title(format!("{title}: {name}"))
+                .w(px(520.))
+                .child(content)
+                .footer(
+                    gpui_kit::component::dialog::DialogFooter::new()
+                        .gap_2()
+                        .children((!is_link).then(|| {
+                            Button::new("info-chmod").small().outline().icon(Lucide::ShieldCheck).label(t.fs_info_open_chmod)
+                                .on_click(move |_, window, cx| {
+                                    chmod_entity.update(cx, |this, cx| this.open_chmod_dialog(path_for_chmod.clone(), is_dir, current_mode, window, cx));
+                                })
+                        }))
+                        .children(is_dir.then(|| {
+                            Button::new("info-terminal").small().outline().icon(Lucide::SquareTerminal).label(t.fs_menu_open_terminal)
+                                .on_click(move |_, window, cx| {
+                                    terminal_entity.update(cx, |this, cx| this.open_folder_in_terminal(path_for_terminal.clone(), window, cx));
+                                })
+                        }))
+                        .child(gpui_kit::component::dialog::DialogClose::new().child(Button::new("info-close").label(t.fs_info_close)))
+                )
+        });
     }
 
     /// Picker rows: folders only (depth-first, expanded branches inline),
@@ -2538,6 +3660,9 @@ impl AwanApp {
             crate::docker::Action::Restart(_) => (t.docker_restart_ok, ButtonVariant::Warning),
             crate::docker::Action::Stop(_) => (t.docker_stop_ok, ButtonVariant::Danger),
             crate::docker::Action::ComposeDown(_) => (t.docker_down_ok, ButtonVariant::Danger),
+            crate::docker::Action::ImageRemove(_) | crate::docker::Action::ImagePrune { .. }
+            | crate::docker::Action::VolumeRemove(_) | crate::docker::Action::VolumePrune
+            | crate::docker::Action::ContainerRemove(_) => (t.docker_delete_ok, ButtonVariant::Danger),
             _ => (t.docker_rebuild_ok, ButtonVariant::Warning),
         };
         let title = i18n::docker_confirm_title(self.lang, &action);
@@ -2654,6 +3779,343 @@ impl AwanApp {
         });
     }
 
+    /// Pull image (`volume == false`) or Create volume: one name field, then
+    /// the action runs with its output in the Docker page's panel.
+    fn open_docker_resource_dialog(&mut self, volume: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let input = if volume { self.docker_volume_input.clone() } else { self.docker_pull_input.clone() };
+        let entity = cx.entity();
+        let t = self.t();
+        let (title, label, note, ok, icon) = if volume {
+            (t.docker_volume_title, t.docker_volume_label, t.docker_volume_note, t.docker_volume_create, Lucide::HardDrive)
+        } else {
+            (t.docker_image_pull_title, t.docker_image_pull_label, t.docker_image_pull_note, t.docker_image_pull, Lucide::Download)
+        };
+        let muted = cx.theme().muted_foreground;
+        window.open_dialog(cx, move |dialog, _, _| {
+            let entity = entity.clone();
+            let submit_input = input.clone();
+            dialog
+                .title(title)
+                .child(
+                    v_flex().gap_2()
+                        .child(Form::new().child(Field::new().label(label).child(Input::new(&input))))
+                        .child(div().text_xs().text_color(muted).child(note)),
+                )
+                .footer(
+                    gpui_kit::component::dialog::DialogFooter::new()
+                        .gap_2()
+                        .child(gpui_kit::component::dialog::DialogClose::new().child(Button::new("docker-resource-cancel").label(t.fs_dialog_cancel)))
+                        .child(gpui_kit::component::dialog::DialogAction::new().child(
+                            Button::new("docker-resource-ok").primary().icon(icon).label(ok).on_click(move |_, window, cx| {
+                                let name = submit_input.read(cx).value().trim().to_string();
+                                if name.is_empty() { return; }
+                                let action = if volume { crate::docker::Action::VolumeCreate(name) } else { crate::docker::Action::ImagePull(name) };
+                                entity.update(cx, |this, cx| this.run_docker_action(action, cx));
+                                window.close_dialog(cx);
+                            }),
+                        )),
+                )
+        });
+    }
+
+    fn open_stalwart(&mut self, container: String, cx: &mut Context<Self>) {
+        self.terminal_mut().stalwart.open(container);
+        self.page = Page::Stalwart;
+        cx.notify();
+    }
+
+    /// Saves the Cloudflare import file to a path the user picks.
+    fn save_stalwart_zone(&mut self, text: String, file_name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_new_path(&downloads_dir(), Some(&file_name));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else { return; };
+            let result = std::fs::write(&path, text).map(|()| path).map_err(|error| error.to_string());
+            let _ = this.update_in(cx, |app, _, cx| { app.stalwart_export = Some(result); cx.notify(); });
+        }).detach();
+    }
+
+    fn run_stalwart_check(&mut self, cx: &mut Context<Self>) {
+        let t = self.t();
+        let hostname = self.stalwart_hostname.read(cx).value().trim().trim_end_matches('.').to_ascii_lowercase();
+        let Some(container) = self.terminal().stalwart.container.clone() else { return; };
+        let address = self.active_host().map(|host| host.address.clone()).unwrap_or_default();
+        let result = match crate::stalwart::domain_of(&hostname).map(str::to_owned) {
+            Some(domain) if crate::stalwart::valid_hostname(&hostname) => {
+                self.terminal_mut().request_stalwart_check(crate::stalwart::Request { container, hostname, domain, address })
+            }
+            _ => Err(t.stalwart_hostname_invalid.into()),
+        };
+        if let Err(error) = result { self.terminal_mut().stalwart.error = Some(error); }
+        cx.notify();
+    }
+
+    /// Guided setup for a Stalwart container: read-only checks, the DNS to
+    /// create by hand, Stalwart's own wizard through an SSH tunnel, the
+    /// restart, and the final HTTPS/certificate check.
+    fn render_stalwart(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::stalwart::{Phase, Status};
+        let t = self.t();
+        let lang = self.lang;
+        // The tunnel reports its port asynchronously; open the browser on
+        // the first render after it is listening, once.
+        if let (true, Some(port)) = (self.terminal().tunnel_open_browser, self.terminal().tunnel) {
+            self.terminal_mut().tunnel_open_browser = false;
+            cx.open_url(&format!("http://127.0.0.1:{port}/admin"));
+        }
+        let theme = cx.theme();
+        let (muted, border, radius, green, yellow, red) = (theme.muted_foreground, theme.border, theme.radius, theme.green, theme.yellow, theme.red);
+        let back = Button::new("stalwart-back").small().ghost().icon(Lucide::ArrowLeft).label(t.stalwart_back)
+            .on_click(cx.listener(|this, _, _, cx| { this.page = Page::Docker; cx.notify(); }));
+        let page = v_flex().w_full().p_4().gap_3().child(h_flex().child(back));
+        if !self.terminal().connected {
+            return page.child(notice_row(Lucide::Info, muted, radius, t.docker_offline_hint)).into_any_element();
+        }
+        let Some(container) = self.terminal().stalwart.container.clone() else {
+            return page.child(notice_row(Lucide::Info, muted, radius, t.stalwart_no_container)).into_any_element();
+        };
+
+        let state = &self.terminal().stalwart;
+        let status_style = |status: Status| match status {
+            Status::Ok => (Lucide::CircleCheck, green),
+            Status::Warn => (Lucide::TriangleAlert, yellow),
+            Status::Fail => (Lucide::CircleX, red),
+            Status::Unknown => (Lucide::Circle, muted),
+        };
+        let check_row = |icon: Lucide, color: Hsla, label: String, detail: String| {
+            h_flex().w_full().gap_2().items_start()
+                .child(Icon::new(icon).small().text_color(color).flex_shrink_0().mt(px(2.)))
+                .child(v_flex().flex_1().min_w_0()
+                    .child(div().text_sm().child(label))
+                    .child(div().text_xs().text_color(muted).child(detail)))
+        };
+        let section = |title: &'static str, done: bool| {
+            v_flex().w_full().gap_2().p_3().rounded(radius).border_1().border_color(if done { green.opacity(0.5) } else { border })
+                .child(h_flex().gap_2().items_center()
+                    .when(done, |row| row.child(Icon::new(Lucide::CircleCheck).small().text_color(green)))
+                    .child(div().text_sm().font_bold().child(title)))
+        };
+
+        // Header: the hostname to set up and the Check button.
+        let (hostname, domain) = state.checked_for.clone().unwrap_or_default();
+        let server_ip = state.value("server_ip").unwrap_or("").to_string();
+        let mut header = v_flex().w_full().gap_2().p_3().rounded(radius).border_1().border_color(border)
+            .child(h_flex().gap_2().items_center()
+                .child(Icon::new(Lucide::Mail).small().text_color(muted))
+                .child(div().text_sm().font_bold().child(i18n::stalwart_heading(lang, &container))))
+            .child(div().text_xs().text_color(muted).child(t.stalwart_hostname_label))
+            .child(h_flex().gap_2().items_center()
+                .child(div().w(px(320.)).child(Input::new(&self.stalwart_hostname)))
+                .child(Button::new("stalwart-check").small().primary().icon(Lucide::RefreshCw).label(t.stalwart_check).disabled(state.busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.run_stalwart_check(cx))))
+                .when(state.busy, |row| row.child(Spinner::new().small().color(muted)).child(div().text_xs().text_color(muted).child(t.stalwart_checking))))
+            .child(div().text_xs().text_color(muted).child(t.stalwart_hostname_hint));
+        if state.report.is_some() {
+            header = header.child(div().text_xs().child(i18n::stalwart_domain(lang, &domain, if server_ip.is_empty() { "—" } else { &server_ip })));
+        }
+        if let Some(error) = &state.error {
+            header = header.child(notice_row(Lucide::CircleAlert, red, radius, error.clone()));
+        }
+        let mut page = page.child(header);
+        if state.report.is_none() {
+            return page.child(div().text_xs().text_color(muted).child(t.stalwart_first_check)).into_any_element();
+        }
+        let ok = |key: &str| state.check(key).is_some_and(|check| check.status == Status::Ok);
+
+        // 1. Server & container.
+        let server_keys = ["container", "mounts", "port_25", "port_465", "port_993", "port_443", "port_8080", "outbound_25", "ptr"];
+        let mut server = section(t.stalwart_step_server, server_keys.iter().all(|key| ok(key)));
+        for key in server_keys {
+            if let Some(check) = state.check(key) {
+                let (icon, color) = status_style(check.status);
+                let detail = i18n::stalwart_check_detail(lang, key, check.status == Status::Ok, &check.detail, &hostname);
+                server = server.child(check_row(icon, color, i18n::stalwart_check_label(lang, key), detail));
+            }
+        }
+        server = server.child(div().text_xs().text_color(muted).child(t.stalwart_ptr_note));
+
+        // 2. DNS records to create by hand in Cloudflare.
+        let records = crate::stalwart::records(&hostname, &domain, &server_ip);
+        let before_ready = records.iter().filter(|r| r.phase == Phase::BeforeRestart).all(|r| r.key.is_none_or(|key| ok(key) || key == "spf_host"));
+        let mut dns = section(t.stalwart_step_dns, records.iter().all(|r| r.key.is_none_or(|key| ok(key))))
+            .child(notice_row(Lucide::Info, yellow, radius, t.stalwart_dns_note));
+
+        // One import in Cloudflare instead of typing each record. An import
+        // only adds, so records that would conflict are listed for deletion.
+        let mut stale: Vec<(&str, String, String)> = Vec::new();
+        if let Some(check) = state.check("mx").filter(|check| check.status == Status::Fail && check.detail != "missing") {
+            for target in check.detail.split(", ").filter(|target| *target != hostname) {
+                stale.push(("MX", domain.clone(), target.to_owned()));
+            }
+        }
+        if let Some(value) = state.check("spf_domain").and_then(|check| check.detail.strip_prefix("unauthorized:").map(str::to_owned)) {
+            stale.push(("TXT", domain.clone(), value));
+        }
+        if let Some(check) = state.check("a_record").filter(|check| check.status == Status::Fail && !matches!(check.detail.as_str(), "missing" | "proxied")) {
+            stale.push(("A", hostname.clone(), check.detail.clone()));
+        }
+        let zone = crate::stalwart::zone_file(&records, &domain);
+        let file_name = format!("{domain}-stalwart-cloudflare.txt");
+        let mut import = v_flex().w_full().gap_1().p_2().rounded(radius).bg(theme.secondary)
+            .child(div().text_xs().font_bold().child(t.stalwart_import_heading));
+        for (number, line) in [t.stalwart_import_1, t.stalwart_import_2, t.stalwart_import_3, t.stalwart_import_4].into_iter().enumerate() {
+            import = import.child(h_flex().gap_2().items_start().text_xs()
+                .child(div().w(px(16.)).flex_shrink_0().font_bold().child(format!("{}.", number + 1)))
+                .child(div().flex_1().min_w_0().child(line)));
+        }
+        for (kind, name, value) in &stale {
+            import = import.child(h_flex().gap_2().items_start().pl(px(24.)).text_xs().font_family("monospace").text_color(red)
+                .child(Icon::new(Lucide::Trash).small().text_color(red).flex_shrink_0().mt(px(2.)))
+                .child(div().flex_1().min_w_0().child(i18n::stalwart_remove_record(lang, kind, name, value))));
+        }
+        let mut export_row = h_flex().gap_2().items_center().flex_wrap().pt_1()
+            .child(Button::new("stalwart-export").small().primary().icon(Lucide::Upload).label(t.stalwart_export_zone).disabled(server_ip.is_empty())
+                .on_click(cx.listener(move |this, _, window, cx| this.save_stalwart_zone(zone.clone(), file_name.clone(), window, cx))));
+        match &self.stalwart_export {
+            _ if server_ip.is_empty() => export_row = export_row.child(div().text_xs().text_color(red).child(t.stalwart_export_no_ip)),
+            Some(Ok(path)) => {
+                let reveal = path.clone();
+                export_row = export_row
+                    .child(div().text_xs().text_color(green).child(i18n::stalwart_export_saved(lang, &path.display().to_string())))
+                    .child(Button::new("stalwart-reveal").small().ghost().icon(Lucide::FolderOpen).label(t.stalwart_show_file)
+                        .on_click(move |_, _, cx| cx.reveal_path(&reveal)));
+            }
+            Some(Err(error)) => export_row = export_row.child(div().text_xs().text_color(red).child(format!("{}: {error}", t.stalwart_export_failed))),
+            None => {}
+        }
+        dns = dns.child(import.child(export_row));
+        for (index, record) in records.iter().enumerate() {
+            if index == 0 { dns = dns.child(div().pt_1().text_xs().font_bold().child(t.stalwart_dns_before)); }
+            if record.phase == Phase::FromZoneFile && records[index - 1].phase == Phase::BeforeRestart {
+                dns = dns.child(div().pt_2().text_xs().font_bold().child(t.stalwart_dns_zone));
+            }
+            let check = record.key.and_then(|key| state.check(key));
+            let (icon, color) = match &check { Some(check) => status_style(check.status), None => (Lucide::Info, muted) };
+            let detail = match (&check, record.key) {
+                (Some(check), _) => i18n::stalwart_dns_detail(lang, check.status == Status::Ok, &check.detail),
+                (None, None) => t.stalwart_dkim_note.to_string(),
+                (None, Some(_)) => String::new(),
+            };
+            let value = record.value.clone();
+            dns = dns.child(
+                h_flex().w_full().gap_2().items_start()
+                    .child(Icon::new(icon).small().text_color(color).flex_shrink_0().mt(px(2.)))
+                    .child(div().w(px(52.)).flex_shrink_0().text_xs().font_bold().font_family("monospace").child(record.kind))
+                    .child(v_flex().flex_1().min_w_0()
+                        .child(div().text_xs().font_family("monospace").child(record.name.clone()))
+                        .child(div().text_xs().font_family("monospace").text_color(if value.is_some() { theme.foreground } else { muted })
+                            .child(value.clone().unwrap_or_else(|| t.stalwart_from_zone_file.into())))
+                        .when(!detail.is_empty(), |col| col.child(div().text_xs().text_color(color).child(detail))))
+                    .when_some(value, |row, value| row.child(
+                        Button::new(("stalwart-copy", index)).xsmall().ghost().icon(Lucide::Copy).tooltip(t.summary_copy)
+                            .on_click(move |_, _, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value.clone()))),
+                    )),
+            );
+        }
+
+        // 3. Stalwart's own wizard, through an SSH tunnel to port 8080.
+        let mode = state.value("state").unwrap_or("down");
+        let mut wizard = section(t.stalwart_step_wizard, matches!(mode, "needs_restart" | "running"))
+            .child(div().text_xs().text_color(if mode == "down" { red } else { muted }).child(match mode {
+                "bootstrap" => t.stalwart_state_bootstrap,
+                "needs_restart" => t.stalwart_state_needs_restart,
+                "running" => t.stalwart_state_running,
+                _ => t.stalwart_state_down,
+            }));
+        if let Some(block) = state.value("bootstrap").map(str::to_owned) {
+            let password = block.lines().find(|line| line.to_ascii_lowercase().contains("password"))
+                .and_then(|line| line.rsplit_once(':')).map(|(_, value)| value.trim().to_owned()).filter(|value| !value.is_empty());
+            let copy = password.unwrap_or_else(|| block.clone());
+            wizard = wizard
+                .child(div().text_xs().font_bold().child(t.stalwart_password_heading))
+                .child(div().w_full().p_2().rounded(radius).bg(theme.secondary).text_xs().font_family("monospace").child(block))
+                .child(h_flex().gap_2().items_center()
+                    .child(Button::new("stalwart-copy-password").small().icon(Lucide::KeyRound).label(t.stalwart_copy_password)
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copy.clone()))))
+                    .child(div().flex_1().min_w_0().text_xs().text_color(muted).child(t.stalwart_password_note)));
+        }
+        let target = state.value("wizard_target").map(str::to_owned);
+        let tunnel = self.terminal().tunnel;
+        let tunnel_target = self.terminal().tunnel_target.clone();
+        let mut tunnel_row = h_flex().gap_2().items_center().flex_wrap();
+        match (tunnel, &tunnel_target, &target) {
+            (Some(port), Some(open_target), _) => {
+                tunnel_row = tunnel_row
+                    .child(Button::new("stalwart-browser").small().primary().icon(Lucide::ExternalLink).label(t.stalwart_open_browser)
+                        .on_click(move |_, _, cx| cx.open_url(&format!("http://127.0.0.1:{port}/admin"))))
+                    .child(Button::new("stalwart-close-tunnel").small().icon(Lucide::Unplug).label(t.stalwart_close_tunnel)
+                        .on_click(cx.listener(|this, _, _, cx| { this.terminal_mut().close_tunnel(); cx.notify(); })))
+                    .child(div().text_xs().text_color(muted).child(i18n::stalwart_tunnel_open(lang, port, open_target)));
+            }
+            (None, Some(_), _) => {
+                tunnel_row = tunnel_row.child(Spinner::new().small().color(muted)).child(div().text_xs().text_color(muted).child(t.stalwart_tunnel_opening));
+            }
+            (_, _, Some(target)) => {
+                let target = target.clone();
+                tunnel_row = tunnel_row.child(Button::new("stalwart-open-wizard").small().primary().icon(Lucide::ExternalLink).label(t.stalwart_open_wizard)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Err(error) = this.terminal_mut().open_tunnel(&target) { this.terminal_mut().tunnel_error = Some(error); }
+                        cx.notify();
+                    })));
+            }
+            _ => tunnel_row = tunnel_row.child(div().text_xs().text_color(red).child(t.stalwart_no_wizard_target)),
+        }
+        wizard = wizard.child(tunnel_row);
+        if let Some(error) = &self.terminal().tunnel_error {
+            wizard = wizard.child(notice_row(Lucide::CircleAlert, red, radius, error.clone()));
+        }
+        for (number, line) in [t.stalwart_guide_1, t.stalwart_guide_2, t.stalwart_guide_3, t.stalwart_guide_4, t.stalwart_guide_5].into_iter().enumerate() {
+            wizard = wizard.child(h_flex().gap_2().items_start().text_xs()
+                .child(div().w(px(16.)).flex_shrink_0().font_bold().child(format!("{}.", number + 1)))
+                .child(div().flex_1().min_w_0().child(line)));
+        }
+
+        // 4. Restart, through the Docker page's confirmed action.
+        let docker = &self.terminal().docker;
+        let restart_action = crate::docker::Action::Restart(container.clone());
+        let restart_title = restart_action.title();
+        let can_restart = mode == "running" || (ok("a_record") && ok("port_443"));
+        let mut restart = section(t.stalwart_step_restart, mode == "running")
+            .child(div().text_xs().text_color(muted).child(t.stalwart_restart_hint));
+        if !can_restart {
+            restart = restart.child(notice_row(Lucide::TriangleAlert, red, radius, t.stalwart_restart_required));
+        } else if !before_ready {
+            restart = restart.child(notice_row(Lucide::TriangleAlert, yellow, radius, t.stalwart_dns_pending));
+        }
+        let mut restart_row = h_flex().gap_2().items_center()
+            .child(Button::new("stalwart-restart").small().when(mode == "needs_restart", |button| button.primary()).icon(Lucide::RotateCw).label(t.stalwart_restart)
+                .disabled(docker.running || !can_restart)
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_docker_action(restart_action.clone(), window, cx))));
+        if docker.title == restart_title {
+            restart_row = match &docker.result {
+                _ if docker.running => restart_row.child(Spinner::new().small().color(muted)).child(div().text_xs().text_color(muted).child(t.docker_running)),
+                Some(Ok(())) => restart_row.child(Tag::success().small().child(t.docker_done)),
+                Some(Err(error)) => restart_row.child(div().text_xs().text_color(red).child(error.clone())),
+                None => restart_row,
+            };
+        }
+        restart = restart.child(restart_row);
+
+        // 5. HTTPS and certificate, then the WebUI.
+        let mut verify = section(t.stalwart_step_verify, ok("https") && ok("certificate"));
+        for key in ["https", "certificate"] {
+            if let Some(check) = state.check(key) {
+                let (icon, color) = status_style(check.status);
+                let detail = i18n::stalwart_check_detail(lang, key, check.status == Status::Ok, &check.detail, &hostname);
+                verify = verify.child(check_row(icon, color, i18n::stalwart_check_label(lang, key), detail));
+            }
+        }
+        let webui = format!("https://{hostname}/admin");
+        verify = verify
+            .child(h_flex().gap_2().items_center()
+                .child(Button::new("stalwart-webui").small().icon(Lucide::ExternalLink).label(t.stalwart_open_webui).disabled(!ok("https"))
+                    .on_click(move |_, _, cx| cx.open_url(&webui)))
+                .child(div().text_xs().font_family("monospace").text_color(muted).child(format!("https://{hostname}/admin"))))
+            .child(div().text_xs().text_color(muted).child(t.stalwart_verify_note));
+
+        page = page.child(server).child(dns).child(wizard).child(restart).child(verify);
+        page.into_any_element()
+    }
+
     fn open_db_browser(&mut self, container: String, kind: crate::docker::DbKind, cx: &mut Context<Self>) {
         let terminal = self.terminal_mut();
         terminal.db_browser.open(crate::docker_db::Target { container, kind });
@@ -2678,12 +4140,126 @@ impl AwanApp {
 
     fn db_open_page(&mut self, db: String, table: crate::docker_db::Table, offset: usize, cx: &mut Context<Self>) {
         self.db_tab = 0;
+        let is_same_table = self.terminal().db_browser.selected.as_ref().is_some_and(|(sel_db, sel_table)| sel_db == &db && sel_table.same(&table));
+        if !is_same_table {
+            self.terminal_mut().db_browser.sort = None;
+        }
+        let sort = self.terminal().db_browser.sort.clone();
         let terminal = self.terminal_mut();
         terminal.db_browser.sql_db = Some(db.clone());
         terminal.db_browser.selected = Some((db.clone(), table.clone()));
         terminal.db_browser.offset = offset;
-        terminal.request_db(crate::docker_db::Query::Rows { db, table, offset });
+        terminal.request_db(crate::docker_db::Query::Rows { db, table, offset, sort });
         cx.notify();
+    }
+
+    fn db_open_last_page(&mut self, db: String, table: crate::docker_db::Table, cx: &mut Context<Self>) {
+        self.db_tab = 0;
+        let sort = self.terminal().db_browser.sort.clone();
+        let terminal = self.terminal_mut();
+        terminal.db_browser.sql_db = Some(db.clone());
+        terminal.db_browser.selected = Some((db.clone(), table.clone()));
+        terminal.request_db(crate::docker_db::Query::LastPage { db, table, sort });
+        cx.notify();
+    }
+
+    fn db_sort_column(&mut self, column: String, cx: &mut Context<Self>) {
+        let Some((db, table)) = self.terminal().db_browser.selected.clone() else { return; };
+        let current_sort = self.terminal().db_browser.sort.clone();
+        let new_sort = match current_sort {
+            Some(s) if s.column == column && !s.desc => {
+                // ASC -> DESC
+                Some(crate::docker_db::Sort { column, desc: true })
+            }
+            Some(s) if s.column == column && s.desc => {
+                // DESC -> None (default order)
+                None
+            }
+            _ => {
+                // None or other column -> ASC
+                Some(crate::docker_db::Sort { column, desc: false })
+            }
+        };
+        let terminal = self.terminal_mut();
+        terminal.db_browser.sort = new_sort.clone();
+        terminal.db_browser.offset = 0;
+        terminal.request_db(crate::docker_db::Query::Rows {
+            db,
+            table,
+            offset: 0,
+            sort: new_sort,
+        });
+        cx.notify();
+    }
+
+    fn confirm_db_truncate(&mut self, db: String, table: crate::docker_db::Table, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::button::ButtonVariant;
+        let t = self.t();
+        let entity = cx.entity();
+        let table_label = table.label();
+        let title = format!("{} — {}", t.db_truncate_dialog_title, table_label);
+        let warning = format!("{} ({}.{})", t.db_truncate_dialog_warning, db, table_label);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = entity.clone();
+            let (db, table) = (db.clone(), table.clone());
+            alert
+                .title(title.clone())
+                .description(warning.clone())
+                .confirm()
+                .ok_text(t.db_truncate_dialog_ok)
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text(t.fs_dialog_cancel)
+                .on_ok(move |_, _, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.db_truncate_table(db.clone(), table.clone(), cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    fn db_truncate_table(&mut self, db: String, table: crate::docker_db::Table, cx: &mut Context<Self>) {
+        let Some(target) = self.terminal().db_browser.target.clone() else { return; };
+        let sql = crate::docker_db::truncate_sql(target.kind, &db, &table);
+        if self.terminal().db_browser.selected.as_ref().is_some_and(|(sel_db, sel_table)| sel_db == &db && sel_table.same(&table)) {
+            self.terminal_mut().db_browser.offset = 0;
+        }
+        self.terminal_mut().request_db(crate::docker_db::Query::Sql { db: Some(db), sql, write: true });
+        cx.notify();
+    }
+
+    fn start_db_table_backup(&mut self, db: String, table: crate::docker_db::Table, format: crate::docker::TableFormat, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.terminal().db_browser.target.clone() else { return; };
+        if self.terminal().docker.running { return; }
+        let ext = match format {
+            crate::docker::TableFormat::Sql => "sql",
+            crate::docker::TableFormat::Csv => "csv",
+        };
+        let file_name = crate::docker::table_backup_file_name(&db, &table.name, ext);
+        let receiver = cx.prompt_for_new_path(&downloads_dir(), Some(&file_name));
+        let action = crate::docker::Action::BackupTable {
+            container: target.container,
+            kind: target.kind,
+            db,
+            schema: table.schema,
+            table: table.name,
+            format,
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else { return; };
+            let _ = this.update_in(cx, |app, _, cx| {
+                let title = action.title();
+                if let Err(error) = app.terminal_mut().download_docker(action, path) {
+                    let docker = &mut app.terminal_mut().docker;
+                    if !docker.running {
+                        docker.begin(title);
+                        docker.running = false;
+                        docker.result = Some(Err(error));
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 
     /// Puts a starter statement in the SQL editor, using the selected
@@ -2775,7 +4351,8 @@ impl AwanApp {
         let revision = self.terminal().db_browser.revision;
         if revision != self.db_grid_revision {
             self.db_grid_revision = revision;
-            let grid = self.terminal().db_browser.rows.as_ref().map(DbGrid::from_rows).unwrap_or_default();
+            let entity = cx.entity();
+            let grid = self.terminal().db_browser.rows.as_ref().map(|rows| DbGrid::from_rows(rows, Some(entity))).unwrap_or_default();
             self.db_grid.update(cx, |state, cx| {
                 let has_rows = !grid.rows.is_empty();
                 // A selected cell from the previous page may be out of range.
@@ -2790,7 +4367,7 @@ impl AwanApp {
         if sql_revision != self.db_sql_revision {
             self.db_sql_revision = sql_revision;
             let grid = match &self.terminal().db_browser.sql_result {
-                Some(crate::docker_db::SqlResult::Grid { columns, rows, .. }) => DbGrid::from_parts(columns, rows),
+                Some(crate::docker_db::SqlResult::Grid { columns, rows, .. }) => DbGrid::from_parts(columns, rows, None),
                 _ => DbGrid::default(),
             };
             self.db_sql_grid.update(cx, |state, cx| {
@@ -2822,8 +4399,9 @@ impl AwanApp {
                     terminal.request_db(crate::docker_db::Query::Databases);
                     if let Some((db, table)) = terminal.db_browser.selected.clone() {
                         let offset = terminal.db_browser.offset;
+                        let sort = terminal.db_browser.sort.clone();
                         terminal.request_db(crate::docker_db::Query::Tables(db.clone()));
-                        terminal.request_db(crate::docker_db::Query::Rows { db, table, offset });
+                        terminal.request_db(crate::docker_db::Query::Rows { db, table, offset, sort });
                     }
                     cx.notify();
                 })));
@@ -2854,16 +4432,54 @@ impl AwanApp {
                             for table in tables {
                                 let selected = browser.selected.as_ref().is_some_and(|(sel_db, sel)| sel_db == db && sel.schema == table.schema && sel.name == table.name);
                                 let (open_db, open_table) = (db.clone(), table.clone());
-                                tree = tree.child(
-                                    h_flex().id(SharedString::from(format!("db-{db}-{}", table.label()))).w_full().gap_1p5().items_center().pl(px(30.)).pr_1().py_0p5()
-                                        .rounded(radius).cursor_pointer()
-                                        .when(selected, |el| el.bg(active))
-                                        .when(!selected, |el| el.hover(move |style| style.bg(accent)))
-                                        .on_click(cx.listener(move |this, _, _, cx| this.db_open_page(open_db.clone(), open_table.clone(), 0, cx)))
-                                        .child(Icon::new(if table.view { Lucide::Eye } else { Lucide::Table }).small().text_color(muted))
-                                        .child(div().flex_1().min_w_0().truncate().text_sm().child(table.label()))
-                                        .children(table.estimate.map(|rows| div().flex_shrink_0().text_xs().text_color(muted).child(compact_count(rows)))),
-                                );
+                                let menu_entity = cx.entity();
+                                let (menu_db, menu_table) = (db.clone(), table.clone());
+                                let menu_builder = move |menu: PopupMenu, _window: &mut Window, _cx: &mut Context<PopupMenu>| -> PopupMenu {
+                                    let mut menu = menu;
+                                    if !menu_table.view {
+                                        menu = menu.item(
+                                            PopupMenuItem::new(t.db_menu_truncate)
+                                                .icon(Lucide::Trash)
+                                                .on_click({
+                                                    let entity = menu_entity.clone();
+                                                    let db = menu_db.clone();
+                                                    let table = menu_table.clone();
+                                                    move |_, window, cx| entity.update(cx, |this, cx| this.confirm_db_truncate(db.clone(), table.clone(), window, cx))
+                                                })
+                                        ).item(PopupMenuItem::separator());
+                                    }
+                                    menu = menu
+                                        .item(
+                                            PopupMenuItem::new(t.db_menu_backup_sql)
+                                                .icon(Lucide::FileCode)
+                                                .on_click({
+                                                    let entity = menu_entity.clone();
+                                                    let db = menu_db.clone();
+                                                    let table = menu_table.clone();
+                                                    move |_, window, cx| entity.update(cx, |this, cx| this.start_db_table_backup(db.clone(), table.clone(), crate::docker::TableFormat::Sql, window, cx))
+                                                })
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t.db_menu_export_csv)
+                                                .icon(Lucide::FileText)
+                                                .on_click({
+                                                    let entity = menu_entity.clone();
+                                                    let db = menu_db.clone();
+                                                    let table = menu_table.clone();
+                                                    move |_, window, cx| entity.update(cx, |this, cx| this.start_db_table_backup(db.clone(), table.clone(), crate::docker::TableFormat::Csv, window, cx))
+                                                })
+                                        );
+                                    menu
+                                };
+                                let row = h_flex().id(SharedString::from(format!("db-{db}-{}", table.label()))).w_full().gap_1p5().items_center().pl(px(30.)).pr_1().py_0p5()
+                                    .rounded(radius).cursor_pointer()
+                                    .when(selected, |el| el.bg(active))
+                                    .when(!selected, |el| el.hover(move |style| style.bg(accent)))
+                                    .on_click(cx.listener(move |this, _, _, cx| this.db_open_page(open_db.clone(), open_table.clone(), 0, cx)))
+                                    .child(Icon::new(if table.view { Lucide::Eye } else { Lucide::Table }).small().text_color(muted))
+                                    .child(div().flex_1().min_w_0().truncate().text_sm().child(table.label()))
+                                    .children(table.estimate.map(|rows| div().flex_shrink_0().text_xs().text_color(muted).child(compact_count(rows))));
+                                tree = tree.child(row.context_menu(menu_builder).into_any_element());
                             }
                         }
                     }
@@ -2887,8 +4503,10 @@ impl AwanApp {
                 let offset = browser.offset;
                 let count = page.map_or(0, |page| page.rows.len());
                 let more = page.is_some_and(|page| page.more);
+                let (first_db, first_table) = (db.clone(), table.clone());
                 let (prev_db, prev_table) = (db.clone(), table.clone());
                 let (next_db, next_table) = (db.clone(), table.clone());
+                let (last_db, last_table) = (db.clone(), table.clone());
                 let bar = h_flex().w_full().gap_2().items_center().flex_wrap().px_3().py_2().border_b_1().border_color(border)
                     .child(Icon::new(if table.view { Lucide::Eye } else { Lucide::Table }).small().text_color(muted))
                     .child(div().text_sm().font_bold().child(format!("{db} › {}", table.label())))
@@ -2898,18 +4516,30 @@ impl AwanApp {
                     } else {
                         t.db_browser_loading.to_string()
                     }))
+                    .child(Button::new("db-first").small().icon(Lucide::ChevronsLeft).disabled(offset == 0 || loading)
+                        .tooltip(t.db_browser_first_page)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.db_open_page(first_db.clone(), first_table.clone(), 0, cx);
+                        })))
                     .child(Button::new("db-prev").small().icon(Lucide::ChevronLeft).disabled(offset == 0 || loading)
+                        .tooltip(t.db_browser_prev_page)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let offset = offset.saturating_sub(crate::docker_db::PAGE);
                             this.db_open_page(prev_db.clone(), prev_table.clone(), offset, cx);
                         })))
                     .child(Button::new("db-next").small().icon(Lucide::ChevronRight).disabled(!more || loading)
+                        .tooltip(t.db_browser_next_page)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.db_open_page(next_db.clone(), next_table.clone(), offset + crate::docker_db::PAGE, cx);
+                        })))
+                    .child(Button::new("db-last").small().icon(Lucide::ChevronsRight).disabled(!more || loading)
+                        .tooltip(t.db_browser_last_page)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.db_open_last_page(last_db.clone(), last_table.clone(), cx);
                         })));
                 let body: AnyElement = match page {
                     Some(page) if page.columns.is_empty() || page.rows.is_empty() => div().p_4().text_sm().text_color(muted).child(t.db_browser_no_rows).into_any_element(),
-                    Some(_) => grid_with_shift_scroll(&self.db_grid),
+                    Some(_) => grid_with_shift_scroll("db-grid-hscroll", &self.db_grid, cx),
                     None => div().p_4().child(Spinner::new().small().color(muted)).into_any_element(),
                 };
                 v_flex().size_full().min_w_0()
@@ -2948,7 +4578,7 @@ impl AwanApp {
                     .child(notice_row(Lucide::CircleCheck, cx.theme().green, radius, message.clone())).into_any_element(),
                 (None, Some(crate::docker_db::SqlResult::Grid { columns, rows, truncated })) if !columns.is_empty() => v_flex().size_full().min_w_0()
                     .child(div().px_3().py_1().text_xs().text_color(muted).child(i18n::db_sql_rows(lang, rows.len(), *truncated)))
-                    .child(div().flex_1().min_h_0().min_w_0().w_full().child(grid_with_shift_scroll(&self.db_sql_grid)))
+                    .child(div().flex_1().min_h_0().min_w_0().w_full().child(grid_with_shift_scroll("db-sql-hscroll", &self.db_sql_grid, cx)))
                     .into_any_element(),
                 (None, Some(_)) => div().p_4().text_sm().text_color(muted).child(t.db_sql_no_result).into_any_element(),
                 (None, None) => div().p_4().text_xs().text_color(muted).child(t.db_sql_hint).into_any_element(),
@@ -2971,25 +4601,27 @@ impl AwanApp {
             .child(div().flex_1().min_h_0().min_w_0().w_full().child(if self.db_tab == 0 { data } else { sql_panel }));
 
         let mut content = v_flex().size_full().p_4().gap_3().child(header);
-        if let Some(error) = &browser.error {
+        if let Some(error) = browser.error.as_ref().or(if self.db_tab == 0 { browser.sql_error.as_ref() } else { None }) {
             content = content.child(notice_row(Lucide::TriangleAlert, red, radius, error.clone()));
         }
-        content
-            .child(
-                div().flex_1().min_h_0().w_full().child(
-                    h_resizable("db-browser-split")
-                        .child(resizable_panel().size(px(280.)).size_range(px(200.)..px(520.)).child(
-                            div().size_full().rounded(radius).border_1().border_color(border).overflow_y_scrollbar().child(tree),
-                        ))
-                        // `min_w_0` lets the panel be narrower than a wide
-                        // table, so the table scrolls inside it instead of
-                        // being cut off at the edge.
-                        .child(resizable_panel().child(
-                            div().size_full().min_w_0().rounded(radius).border_1().border_color(border).overflow_hidden().child(right),
-                        )),
-                ),
-            )
-            .into_any_element()
+        content = content.child(
+            div().flex_1().min_h_0().w_full().child(
+                h_resizable("db-browser-split")
+                    .child(resizable_panel().size(px(280.)).size_range(px(200.)..px(520.)).child(
+                        div().size_full().rounded(radius).border_1().border_color(border).overflow_y_scrollbar().child(tree),
+                    ))
+                    // `min_w_0` lets the panel be narrower than a wide
+                    // table, so the table scrolls inside it instead of
+                    // being cut off at the edge.
+                    .child(resizable_panel().child(
+                        div().size_full().min_w_0().rounded(radius).border_1().border_color(border).overflow_hidden().child(right),
+                    )),
+            ),
+        );
+        if let Some(output) = self.render_docker_output(cx) {
+            content = content.child(output);
+        }
+        content.into_any_element()
     }
 
     fn render_docker(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -3010,6 +4642,20 @@ impl AwanApp {
                 ),
             ).into_any_element();
         }
+        let revision = self.terminal().docker.revision;
+        if revision != self.docker_seen_revision {
+            self.docker_seen_revision = revision;
+            self.docker_output_scroll.scroll_to_bottom();
+        }
+        let mut tabs = h_flex().gap_1();
+        for (value, label, icon) in [(0u8, t.docker_tab_containers, Lucide::Container), (1, t.docker_tab_images, Lucide::Layers), (2, t.docker_tab_volumes, Lucide::HardDrive)] {
+            tabs = tabs.child(Button::new(SharedString::from(format!("docker-tab-{value}"))).small().icon(icon).label(label)
+                .selected(self.docker_tab == value)
+                .on_click(cx.listener(move |this, _, _, cx| { this.docker_tab = value; cx.notify(); })));
+        }
+        if self.docker_tab != 0 {
+            return self.render_docker_resources(tabs.into_any_element(), cx);
+        }
         {
             let docker = &self.terminal().docker;
             let need_list = docker.containers.is_none() && docker.list_error.is_none() && !docker.listing;
@@ -3017,11 +4663,6 @@ impl AwanApp {
             if need_list { self.terminal_mut().request_docker_list(); }
             // One sample when the page opens; Auto-refresh keeps it current.
             if need_stats { self.terminal_mut().request_docker_stats(); }
-        }
-        let revision = self.terminal().docker.revision;
-        if revision != self.docker_seen_revision {
-            self.docker_seen_revision = revision;
-            self.docker_output_scroll.scroll_to_bottom();
         }
 
         let docker = &self.terminal().docker;
@@ -3127,8 +4768,156 @@ impl AwanApp {
 
         let output = self.render_docker_output(cx);
         v_flex().size_full().p_4().gap_3()
+            .child(tabs)
             .child(header)
             .child(usage_bar)
+            .child(div().flex_1().min_h_0().w_full().overflow_y_scrollbar().child(list))
+            .children(output)
+            .into_any_element()
+    }
+
+    /// The Images and Volumes tabs: one list each, read together on first
+    /// open, with the same output panel as container actions.
+    fn render_docker_resources(&mut self, tabs: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        use crate::docker::Action;
+        {
+            let docker = &self.terminal().docker;
+            if docker.resources.is_none() && docker.resources_error.is_none() && !docker.resources_loading {
+                self.terminal_mut().request_docker_resources();
+            }
+        }
+        let t = self.t();
+        let lang = self.lang;
+        let volumes_tab = self.docker_tab == 2;
+        let muted = cx.theme().muted_foreground;
+        let radius = cx.theme().radius;
+        let docker = &self.terminal().docker;
+        let busy = docker.running;
+        let loading = docker.resources_loading;
+        let needle = self.docker_search.read(cx).value().trim().to_lowercase();
+        let matches = |values: &[&str]| needle.is_empty() || values.iter().any(|value| value.to_lowercase().contains(&needle));
+
+        let mut header = h_flex().w_full().gap_2().items_center().flex_wrap()
+            .child(Button::new("docker-res-refresh").small().icon(Lucide::RefreshCw).label(t.live_reload).disabled(loading)
+                .on_click(cx.listener(|this, _, _, cx| { this.terminal_mut().request_docker_resources(); cx.notify(); })))
+            .when(loading, |row| row.child(Spinner::new().small().color(muted)))
+            .child(div().w(px(260.)).child(Input::new(&self.docker_search)));
+        header = if volumes_tab {
+            header
+                .child(Button::new("docker-volume-create").small().icon(Lucide::Plus).label(t.docker_volume_create).disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_docker_resource_dialog(true, window, cx))))
+                .child(Button::new("docker-volume-prune").small().icon(Lucide::BrushCleaning).label(t.docker_volume_prune).disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.confirm_docker_action(Action::VolumePrune, window, cx))))
+        } else {
+            header
+                .child(Button::new("docker-image-pull").small().icon(Lucide::Download).label(t.docker_image_pull).disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_docker_resource_dialog(false, window, cx))))
+                .child(Button::new("docker-image-prune").small().icon(Lucide::BrushCleaning).label(t.docker_prune_dangling).disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.confirm_docker_action(Action::ImagePrune { all: false }, window, cx))))
+                .child(Button::new("docker-image-prune-all").small().icon(Lucide::Trash).label(t.docker_prune_unused).disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.confirm_docker_action(Action::ImagePrune { all: true }, window, cx))))
+        };
+
+        let disk = docker.resources.as_ref().and_then(|resources| if volumes_tab { resources.volume_disk.clone() } else { resources.image_disk.clone() });
+        let summary = h_flex().w_full().gap_2().items_center().flex_wrap()
+            .when_some(disk, |row, disk| row.child(Icon::new(Lucide::HardDrive).small().text_color(muted))
+                .child(div().text_xs().text_color(muted).child(i18n::docker_disk_usage(lang, &disk))));
+
+        let mut list = v_flex().w_full().gap_2();
+        if docker.permission_denied() {
+            list = list.child(
+                v_flex().gap_2()
+                    .child(notice_row(Lucide::CircleAlert, cx.theme().yellow, radius, t.docker_permission_hint))
+                    .child(h_flex().child(Button::new("docker-res-setup-group").small().icon(Lucide::KeyRound).label(t.docker_permission_setup)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.run_in_terminal("sudo usermod -aG docker \"$USER\" && echo 'Akses Docker siap. Klik Muat ulang di halaman Docker.'".into(), window, cx);
+                        })))),
+            );
+        } else if let Some(error) = &docker.resources_error {
+            list = list.child(notice_row(Lucide::CircleAlert, cx.theme().red, radius, error.clone()));
+        }
+
+        let theme = cx.theme();
+        let row_bg = theme.muted.opacity(0.35);
+        let green = theme.green;
+        match &docker.resources {
+            None if loading => list = list.child(div().text_sm().text_color(muted).child(t.docker_images_loading)),
+            None => {}
+            Some(resources) if volumes_tab => {
+                let shown: Vec<_> = resources.volumes.iter()
+                    .filter(|volume| matches(&[volume.name.as_str(), volume.project.as_str(), volume.used_by.join(" ").as_str()]))
+                    .collect();
+                list = list.child(div().text_xs().text_color(muted).child(i18n::docker_resource_count(lang, shown.len(), resources.volumes.len())));
+                if resources.volumes.is_empty() {
+                    list = list.child(div().text_sm().text_color(muted).child(t.docker_volumes_empty));
+                } else if shown.is_empty() {
+                    list = list.child(div().text_sm().text_color(muted).child(t.docker_resources_no_match));
+                }
+                for (index, volume) in shown.into_iter().enumerate() {
+                    let in_use = !volume.used_by.is_empty();
+                    let mountpoint = volume.mountpoint.clone();
+                    let remove = Action::VolumeRemove(volume.name.clone());
+                    let details = v_flex().flex_1().min_w_0().gap_0p5()
+                        .child(h_flex().gap_2().items_center().flex_wrap()
+                            .child(Icon::new(Lucide::HardDrive).small().text_color(if in_use { green } else { muted }))
+                            .child(div().min_w_0().text_sm().font_bold().truncate().child(volume.name.clone()))
+                            .when(volume.anonymous(), |row| row.child(Tag::secondary().small().child(t.docker_volume_anonymous)))
+                            .when(!volume.project.is_empty(), |row| row.child(Tag::info().small().child(volume.project.clone())))
+                            .when(!in_use, |row| row.child(Tag::warning().small().child(t.docker_image_unused))))
+                        .child(div().text_xs().font_family("monospace").text_color(muted).truncate().child(format!("{} · {}", volume.driver, volume.mountpoint)))
+                        .when(in_use, |details| details.child(div().text_xs().text_color(muted).truncate().child(i18n::docker_used_by(lang, &volume.used_by))));
+                    let actions = h_flex().gap_1().flex_shrink_0()
+                        .child(Button::new(("volume-copy", index)).small().ghost().icon(Lucide::Copy).tooltip(t.docker_copy_mountpoint)
+                            .on_click(move |_, window, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(mountpoint.clone()));
+                                window.push_notification(t.docker_copied, cx);
+                            }))
+                        .child(Button::new(("volume-remove", index)).small().ghost().icon(Lucide::Trash).disabled(busy || in_use)
+                            .tooltip(if in_use { i18n::docker_in_use_delete(lang, &volume.used_by) } else { t.docker_volume_remove.to_string() })
+                            .on_click(cx.listener(move |this, _, window, cx| this.confirm_docker_action(remove.clone(), window, cx))));
+                    list = list.child(h_flex().w_full().gap_3().items_start().p_2().rounded(radius).bg(row_bg).child(details).child(actions));
+                }
+            }
+            Some(resources) => {
+                let shown: Vec<_> = resources.images.iter()
+                    .filter(|image| matches(&[image.repository.as_str(), image.tag.as_str(), image.id.as_str(), image.used_by.join(" ").as_str()]))
+                    .collect();
+                list = list.child(div().text_xs().text_color(muted).child(i18n::docker_resource_count(lang, shown.len(), resources.images.len())));
+                if resources.images.is_empty() {
+                    list = list.child(div().text_sm().text_color(muted).child(t.docker_images_empty));
+                } else if shown.is_empty() {
+                    list = list.child(div().text_sm().text_color(muted).child(t.docker_resources_no_match));
+                }
+                for (index, image) in shown.into_iter().enumerate() {
+                    let in_use = !image.used_by.is_empty();
+                    let reference = image.reference();
+                    let remove = Action::ImageRemove(reference.clone());
+                    let details = v_flex().flex_1().min_w_0().gap_0p5()
+                        .child(h_flex().gap_2().items_center().flex_wrap()
+                            .child(Icon::new(Lucide::Layers).small().text_color(if in_use { green } else { muted }))
+                            .child(div().min_w_0().text_sm().font_bold().truncate().child(if image.dangling() { t.docker_image_untagged.to_string() } else { reference.clone() }))
+                            .when(!in_use, |row| row.child(Tag::warning().small().child(t.docker_image_unused))))
+                        .child(div().text_xs().text_color(muted).child(format!("{} · {} · {}", image.short_id(), image.created, image.size)))
+                        .when(in_use, |details| details.child(div().text_xs().text_color(muted).truncate().child(i18n::docker_used_by(lang, &image.used_by))));
+                    let mut actions = h_flex().gap_1().flex_shrink_0();
+                    if !image.dangling() {
+                        let pull = Action::ImagePull(reference.clone());
+                        actions = actions.child(Button::new(("image-pull", index)).small().ghost().icon(Lucide::Download).tooltip(t.docker_image_update).disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| this.run_docker_action(pull.clone(), cx))));
+                    }
+                    actions = actions.child(Button::new(("image-remove", index)).small().ghost().icon(Lucide::Trash).disabled(busy || in_use)
+                        .tooltip(if in_use { i18n::docker_in_use_delete(lang, &image.used_by) } else { t.docker_image_remove.to_string() })
+                        .on_click(cx.listener(move |this, _, window, cx| this.confirm_docker_action(remove.clone(), window, cx))));
+                    list = list.child(h_flex().w_full().gap_3().items_start().p_2().rounded(radius).bg(row_bg).child(details).child(actions));
+                }
+            }
+        }
+
+        let output = self.render_docker_output(cx);
+        v_flex().size_full().p_4().gap_3()
+            .child(tabs)
+            .child(header)
+            .child(summary)
             .child(div().flex_1().min_h_0().w_full().overflow_y_scrollbar().child(list))
             .children(output)
             .into_any_element()
@@ -3218,6 +5007,14 @@ impl AwanApp {
             let start = Action::Start(name.clone());
             actions = actions.child(Button::new(id("start")).small().ghost().icon(Lucide::Play).tooltip(t.docker_start).disabled(busy)
                 .on_click(cx.listener(move |this, _, _, cx| this.run_docker_action(start.clone(), cx))));
+            let remove = Action::ContainerRemove(name.clone());
+            actions = actions.child(Button::new(id("remove")).small().ghost().danger().icon(Lucide::Trash).tooltip(t.docker_delete_container).disabled(busy)
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_docker_action(remove.clone(), window, cx))));
+        }
+        if container.is_stalwart() {
+            let setup_name = name.clone();
+            actions = actions.child(Button::new(id("stalwart")).small().ghost().icon(Lucide::Mail).tooltip(t.stalwart_open)
+                .on_click(cx.listener(move |this, _, _, cx| this.open_stalwart(setup_name.clone(), cx))));
         }
         if let (Some(project), false) = (container.project(), container.service.is_empty()) {
             let rebuild = Action::ComposeUp { project, service: Some(container.service.clone()) };
@@ -3232,8 +5029,9 @@ impl AwanApp {
                 .when(show_project && !container.project.is_empty(), |row| row.child(Tag::secondary().small().child(container.project.clone())))
                 .child(div().text_xs().text_color(color).child(container.status.clone())))
             .child(div().text_xs().font_family("monospace").text_color(muted).truncate().child(container.image.clone()));
-        if !container.ports.is_empty() {
-            details = details.child(div().text_xs().font_family("monospace").text_color(muted).child(container.ports.clone()));
+        let mappings = container.port_mappings();
+        if !mappings.is_empty() {
+            details = details.child(port_groups(&mappings, t, cx));
         }
         // CPU is per core in Docker (up to 100% × cores), so its bar is
         // scaled to the whole host; RAM is against the container's limit.
@@ -3779,6 +5577,11 @@ impl AwanApp {
                         let path = menu_path.clone();
                         move |_, window, cx| entity.update(cx, |this, cx| this.open_chmod_dialog(path.clone(), is_dir, current_mode, window, cx))
                     }))
+                    .item(PopupMenuItem::new(t.fs_menu_info).icon(Lucide::Info).disabled(!fs_enabled).on_click({
+                        let entity = menu_entity.clone();
+                        let path = menu_path.clone();
+                        move |_, window, cx| entity.update(cx, |this, cx| this.open_info_dialog(path.clone(), is_dir, current_mode, window, cx))
+                    }))
                     .item(PopupMenuItem::separator())
                     .item(PopupMenuItem::new(t.fs_menu_delete).icon(Lucide::Trash).disabled(!fs_enabled).on_click({
                         let entity = menu_entity.clone();
@@ -3796,9 +5599,9 @@ impl AwanApp {
         }
     }
 
-    /// Kept compact on purpose (one toolbar row + one thin status row, plus
-    /// warning lines only when something actually needs attention) so the
-    /// code editor itself keeps most of the panel's vertical space.
+    /// Kept compact on purpose: one unified toolbar row (input path, reload,
+    /// status badge, byte count, search with tooltip, markdown preview, copy, save)
+    /// so the code editor itself keeps maximum vertical space.
     fn render_editor_document(&mut self, online: bool, host: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.t();
         let muted = cx.theme().muted_foreground;
@@ -3807,34 +5610,28 @@ impl AwanApp {
         let busy = self.terminal().file_busy;
 
         let open_icon = if self.editor_path.is_empty() { Lucide::FolderOpen } else { Lucide::RefreshCw };
-        let mut toolbar = v_flex().gap_2().p_3().rounded(radius).border_1().border_color(border)
-            .child(
-                h_flex().gap_2()
-                    .child(div().flex_1().min_w_0().child(Input::new(&self.editor_path_input).prefix(Icon::new(Lucide::File).small().text_color(muted))))
-                    .child(Button::new("editor-open").small().disabled(!(online && !busy)).icon(open_icon).label(if self.editor_path.is_empty() { t.editor_open_button } else { t.editor_reload_button })
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let path = this.editor_path_input.read(cx).value().to_string();
-                            this.select_remote_file(path, window, cx);
-                        }))),
-            );
-        if busy && !self.explorer_browsing {
-            toolbar = toolbar.child(
-                h_flex().gap_1().items_center()
-                    .child(Spinner::new().small().color(muted))
-                    .child(div().text_xs().text_color(muted).child(if self.editor_saving { t.editor_saving_note } else { t.editor_reading_note })),
-            );
-        }
-        // Errors stay on screen (actionable); a success confirmation isn't —
-        // the loaded/saved content is already visible as proof.
-        if let Some(message) = &self.editor_message {
-            if self.editor_failed {
-                toolbar = toolbar.child(notice_row(Lucide::TriangleAlert, cx.theme().red, radius, message.clone()));
-            }
-        }
-
-        let mut doc = v_flex().size_full().gap_3().child(toolbar);
 
         if self.editor_path.is_empty() {
+            let mut toolbar = h_flex().items_center().gap_2().px_3().py_2().rounded(radius).border_1().border_color(border)
+                .child(div().flex_1().min_w_0().child(Input::new(&self.editor_path_input).prefix(Icon::new(Lucide::File).small().text_color(muted))))
+                .child(Button::new("editor-open").small().disabled(!(online && !busy)).icon(open_icon).label(t.editor_open_button)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let path = this.editor_path_input.read(cx).value().to_string();
+                        this.select_remote_file(path, window, cx);
+                    })));
+            if busy && !self.explorer_browsing {
+                toolbar = toolbar.child(
+                    h_flex().gap_1().items_center()
+                        .child(Spinner::new().small().color(muted))
+                        .child(div().text_xs().text_color(muted).child(if self.editor_saving { t.editor_saving_note } else { t.editor_reading_note })),
+                );
+            }
+            let mut doc = v_flex().size_full().gap_3().child(toolbar);
+            if let Some(message) = &self.editor_message {
+                if self.editor_failed {
+                    doc = doc.child(notice_row(Lucide::TriangleAlert, cx.theme().red, radius, message.clone()));
+                }
+            }
             return doc
                 .child(
                     div().flex_1().min_h_0().p_4().rounded(radius).border_1().border_color(border)
@@ -3852,6 +5649,7 @@ impl AwanApp {
                 )
                 .into_any_element();
         }
+
         let same_host = host == Some(self.editor_host.as_str());
         let current_text = self.editor_text.read(cx).value().to_string();
         let dirty = current_text != self.editor_original;
@@ -3862,19 +5660,54 @@ impl AwanApp {
         } else {
             Tag::success().small().child(t.editor_saved_badge)
         };
-        // Two lines rather than one: the path gets its own line (truncated
-        // with "…"), and the fixed-size pieces — tag, byte count, Copy/Save —
-        // share the second, which wraps the buttons onto a further line when
-        // even that is too narrow. On one line, a narrow pane squeezed the
-        // path to nothing and the fixed pieces were drawn on top of each other.
-        let path_line = div().w_full().min_w_0().truncate().text_xs().font_family("monospace").text_color(muted)
-            .child(format!("{} · {}", self.editor_host, self.editor_path));
-        let status = h_flex().flex_shrink_0().gap_2().items_center().text_xs()
-            .child(status_chip)
-            .child(div().text_color(muted).child(i18n::byte_count(self.lang, text_len)));
         let markdown = is_markdown_file(&self.editor_path);
         let preview = markdown && self.editor_preview;
-        let actions = Toolbar::new("editor-actions").small()
+        let search_open = self.editor_text.read(cx).search_session().open;
+
+        // Group left: Input path, reload button, status chip, byte count, and busy spinner.
+        let mut left = h_flex().items_center().gap_2().flex_1().min_w(px(240.))
+            .child(
+                div().flex_1().min_w(px(120.)).max_w(px(480.)).child(
+                    Input::new(&self.editor_path_input)
+                        .prefix(Icon::new(Lucide::File).small().text_color(muted))
+                )
+            )
+            .child(
+                Button::new("editor-open").small().disabled(!(online && !busy)).icon(open_icon).label(t.editor_reload_button)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let path = this.editor_path_input.read(cx).value().to_string();
+                        this.select_remote_file(path, window, cx);
+                    }))
+            )
+            .child(status_chip)
+            .child(div().text_xs().text_color(muted).flex_shrink_0().child(i18n::byte_count(self.lang, text_len)));
+
+        if busy && !self.explorer_browsing {
+            left = left.child(
+                h_flex().gap_1().items_center().flex_shrink_0()
+                    .child(Spinner::new().small().color(muted))
+                    .child(div().text_xs().text_color(muted).child(if self.editor_saving { t.editor_saving_note } else { t.editor_reading_note })),
+            );
+        }
+
+        let actions = Toolbar::new("editor-actions").small().flex_shrink_0()
+            .child(
+                Button::new("editor-search")
+                    .icon(Lucide::Search)
+                    .label(t.editor_search)
+                    .tooltip(t.editor_search_tooltip)
+                    .selected(search_open)
+                    .disabled(preview)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.editor_text.update(cx, |state, cx| {
+                            if state.search_session().open {
+                                state.close_search(cx);
+                            } else {
+                                state.open_search(false, cx);
+                            }
+                        });
+                    }))
+            )
             .when(markdown, |toolbar| toolbar.child(
                 Button::new("editor-preview").icon(if preview { Lucide::Pencil } else { Lucide::Eye })
                     .label(if preview { t.editor_edit } else { t.editor_preview }).selected(preview)
@@ -3887,14 +5720,30 @@ impl AwanApp {
                 })))
             .child(Button::new("editor-save").primary().icon(Lucide::Save).label(t.editor_save).disabled(!can_save)
                 .on_click(cx.listener(|this, _, _, cx| this.save_draft(cx))));
-        let mut info = v_flex().gap_2().p_3().rounded(radius).border_1().border_color(border)
-            .child(path_line)
-            .child(
-                h_flex().w_full().flex_wrap().items_center().gap_2()
-                    .child(status)
-                    .child(div().flex_1())
-                    .child(actions),
-            );
+
+        // Unified responsive toolbar: 1 row when space permits; wraps to the next line when narrow.
+        let row = h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .flex_wrap()
+            .px_3()
+            .py_1p5()
+            .rounded(radius)
+            .border_1()
+            .border_color(border)
+            .child(left)
+            .child(actions);
+
+        let mut doc = v_flex().size_full().gap_2().child(row);
+
+        if let Some(message) = &self.editor_message {
+            if self.editor_failed {
+                doc = doc.child(notice_row(Lucide::TriangleAlert, cx.theme().red, radius, message.clone()));
+            }
+        }
+
         let mut warnings = h_flex().flex_wrap().gap_2();
         let mut has_warnings = false;
         if !same_host {
@@ -3910,9 +5759,9 @@ impl AwanApp {
             warnings = warnings.child(notice_row(Lucide::TriangleAlert, cx.theme().yellow, radius, t.editor_oversized_warning));
         }
         if has_warnings {
-            info = info.child(warnings);
+            doc = doc.child(warnings);
         }
-        doc = doc.child(info);
+
         doc = doc.child(if preview {
             // Rendered from the current draft, so unsaved edits show too.
             // Keyed by path so each file keeps its own parse/scroll state.
@@ -3928,7 +5777,11 @@ impl AwanApp {
                 .into_any_element()
         } else {
             div().flex_1().min_h_0().rounded(radius).border_1().border_color(border).overflow_hidden()
-                .child(gpui_kit::component::input::Editor::new(&self.editor_text).h_full())
+                .child(
+                    gpui_kit::component::input::Editor::new(&self.editor_text)
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .h_full(),
+                )
                 .into_any_element()
         });
         let _ = window;
@@ -4375,6 +6228,22 @@ fn labeled_row(label: &str, value: &str, muted: Hsla) -> impl IntoElement {
         .child(div().text_sm().child(value.to_string()))
 }
 
+/// A [`labeled_row`] whose values (IP addresses) each get a Copy button.
+fn copy_values_row(label: &str, values: Vec<String>, t: &'static i18n::Strings, muted: Hsla) -> impl IntoElement {
+    h_flex().gap_3().items_center()
+        .child(div().w(px(90.)).flex_shrink_0().text_xs().text_color(muted).child(label.to_string()))
+        .child(h_flex().gap_3().flex_wrap().items_center().children(values.into_iter().map(|value| {
+            let copied = value.clone();
+            h_flex().gap_1().items_center()
+                .child(div().text_sm().font_family("monospace").child(value.clone()))
+                .child(Button::new(SharedString::from(format!("copy-{value}"))).xsmall().ghost().icon(Lucide::Copy).tooltip(t.summary_copy)
+                    .on_click(move |_, window, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copied.clone()));
+                        window.push_notification(t.summary_copied, cx);
+                    }))
+        })))
+}
+
 /// A bordered, icon-led notice line so warnings/errors stand out from the
 /// surrounding text instead of blending in as just another colored line.
 fn notice_row(icon: impl Into<Icon>, color: Hsla, radius: Pixels, text: impl Into<SharedString>) -> impl IntoElement {
@@ -4384,6 +6253,24 @@ fn notice_row(icon: impl Into<Icon>, color: Hsla, radius: Pixels, text: impl Int
         .border_1().border_color(color.opacity(0.35))
         .child(Icon::new(icon).small().text_color(color).flex_shrink_0())
         .child(div().flex_1().min_w_0().text_xs().text_color(color).child(text.into()))
+}
+
+/// An icon on a soft tinted square, for Settings/About rows and cards.
+fn icon_tile(icon: impl Into<Icon>, color: Hsla, size: f32) -> Div {
+    div().size(px(size)).flex_none().rounded(px(size * 0.3)).bg(color.opacity(0.12))
+        .flex().items_center().justify_center()
+        .child(Icon::new(icon).small().text_color(color))
+}
+
+/// A Settings group: icon, title and description above its controls.
+fn settings_section(icon: impl Into<Icon>, color: Hsla, title: &'static str, desc: &'static str, muted: Hsla, body: impl IntoElement) -> Div {
+    v_flex().w_full().gap_3()
+        .child(h_flex().gap_3().items_center()
+            .child(icon_tile(icon, color, 36.))
+            .child(v_flex().min_w_0()
+                .child(div().font_semibold().child(title))
+                .child(div().text_xs().text_color(muted).child(desc))))
+        .child(body)
 }
 
 /// A small inline icon + muted/colored note, for lighter-weight tree/status
@@ -4584,6 +6471,18 @@ fn icon_note(icon: impl Into<Icon>, color: Hsla, text: impl Into<SharedString>) 
         .child(div().flex_1().min_w_0().text_xs().text_color(color).child(text.into()))
 }
 
+fn detect_indent_size(text: &str, default_size: usize) -> usize {
+    for line in text.lines().take(150) {
+        let spaces = line.chars().take_while(|&c| c == ' ').count();
+        if spaces == 4 {
+            return 4;
+        } else if spaces == 2 {
+            return 2;
+        }
+    }
+    default_size
+}
+
 /// Maps a remote file's extension (or well-known filename) to a tree-sitter
 /// language name for the editor's syntax highlighter. Most extensions are
 /// passed straight through: gpui-component's own `language_name()` already
@@ -4613,18 +6512,51 @@ fn child_path(folder: &str, name: &str) -> String {
     format!("{}/{}", folder.trim_end_matches('/'), name)
 }
 
+/// Compares two database cell values for sorting:
+/// - Handles NULL (None is placed last in ascending order)
+/// - Numeric values (integers, floats) are compared numerically
+/// - Text is compared case-insensitively
+fn compare_db_cells(a: &Option<SharedString>, b: &Option<SharedString>) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (Some(sa), Some(sb)) => {
+            let num_a = sa.trim().parse::<f64>();
+            let num_b = sb.trim().parse::<f64>();
+            match (num_a, num_b) {
+                (Ok(na), Ok(nb)) if !na.is_nan() && !nb.is_nan() => na.total_cmp(&nb),
+                _ => sa.to_lowercase().cmp(&sb.to_lowercase()),
+            }
+        }
+    }
+}
+
 /// One page of table rows for the Database Browser's `DataTable`. Cells are
 /// stored ready to display (one line); `cell_text` serves copy.
 #[derive(Default)]
 struct DbGrid {
     columns: Vec<(SharedString, Pixels)>,
+    original_rows: Vec<Vec<Option<SharedString>>>,
     rows: Vec<Vec<Option<SharedString>>>,
+    sort_col: Option<usize>,
+    sort_order: ColumnSort,
+    app: Option<Entity<AwanApp>>,
 }
 
 impl DbGrid {
-    fn from_rows(page: &crate::docker_db::Rows) -> Self { Self::from_parts(&page.columns, &page.rows) }
+    fn from_rows(page: &crate::docker_db::Rows, app: Option<Entity<AwanApp>>) -> Self {
+        let mut grid = Self::from_parts(&page.columns, &page.rows, app);
+        if let Some(sort) = &page.sort {
+            if let Some(index) = page.columns.iter().position(|c| c == &sort.column) {
+                grid.sort_col = Some(index);
+                grid.sort_order = if sort.desc { ColumnSort::Descending } else { ColumnSort::Ascending };
+            }
+        }
+        grid
+    }
 
-    fn from_parts(names: &[String], source: &[Vec<Option<String>>]) -> Self {
+    fn from_parts(names: &[String], source: &[Vec<Option<String>>], app: Option<Entity<AwanApp>>) -> Self {
         let display = |value: &Option<String>| value.as_ref().map(|text| SharedString::from(text.replace(['\n', '\r'], " ")));
         let rows: Vec<Vec<Option<SharedString>>> = source.iter().map(|row| row.iter().map(display).collect()).collect();
         // Width from the header and the first rows' text, within sane bounds.
@@ -4632,11 +6564,58 @@ impl DbGrid {
             let widest = rows.iter().take(30)
                 .filter_map(|row| row.get(index).cloned().flatten())
                 .map(|cell| cell.chars().count())
-                .chain(std::iter::once(name.chars().count() + 2))
+                .chain(std::iter::once(name.chars().count() + 4))
                 .max().unwrap_or(4);
-            (SharedString::from(name.clone()), px((widest as f32 * 7.5 + 28.).clamp(80., 360.)))
+            (SharedString::from(name.clone()), px((widest as f32 * 7.5 + 32.).clamp(90., 380.)))
         }).collect();
-        Self { columns, rows }
+        let original_rows = rows.clone();
+        Self {
+            columns,
+            original_rows,
+            rows,
+            sort_col: None,
+            sort_order: ColumnSort::Default,
+            app,
+        }
+    }
+
+    fn apply_local_sort(&mut self) {
+        match (self.sort_col, self.sort_order) {
+            (Some(col), ColumnSort::Ascending) => {
+                self.rows.sort_by(|ra, rb| {
+                    let ca = ra.get(col).cloned().flatten();
+                    let cb = rb.get(col).cloned().flatten();
+                    compare_db_cells(&ca, &cb)
+                });
+            }
+            (Some(col), ColumnSort::Descending) => {
+                self.rows.sort_by(|ra, rb| {
+                    let ca = ra.get(col).cloned().flatten();
+                    let cb = rb.get(col).cloned().flatten();
+                    compare_db_cells(&ca, &cb).reverse()
+                });
+            }
+            _ => {
+                self.rows = self.original_rows.clone();
+            }
+        }
+    }
+
+    fn toggle_local_sort(&mut self, col_ix: usize) {
+        if self.sort_col == Some(col_ix) {
+            self.sort_order = match self.sort_order {
+                ColumnSort::Default => ColumnSort::Ascending,
+                ColumnSort::Ascending => ColumnSort::Descending,
+                ColumnSort::Descending => ColumnSort::Default,
+            };
+            if self.sort_order == ColumnSort::Default {
+                self.sort_col = None;
+            }
+        } else {
+            self.sort_col = Some(col_ix);
+            self.sort_order = ColumnSort::Ascending;
+        }
+        self.apply_local_sort();
     }
 }
 
@@ -4647,7 +6626,68 @@ impl TableDelegate for DbGrid {
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
         let (name, width) = self.columns[col_ix].clone();
-        Column::new(SharedString::from(format!("col-{col_ix}")), name).width(width)
+        let col = Column::new(SharedString::from(format!("col-{col_ix}")), name).width(width).sortable();
+        if self.sort_col == Some(col_ix) {
+            match self.sort_order {
+                ColumnSort::Ascending => col.ascending(),
+                ColumnSort::Descending => col.descending(),
+                ColumnSort::Default => col,
+            }
+        } else {
+            col
+        }
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        let (name, _) = &self.columns[col_ix];
+        let col_name = name.to_string();
+        if let Some(app) = &self.app {
+            app.update(cx, |this, cx| this.db_sort_column(col_name, cx));
+        } else {
+            if sort == ColumnSort::Default {
+                self.sort_col = None;
+                self.sort_order = ColumnSort::Default;
+            } else {
+                self.sort_col = Some(col_ix);
+                self.sort_order = sort;
+            }
+            self.apply_local_sort();
+        }
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let (name, _) = &self.columns[col_ix];
+        let name = name.clone();
+        let col_name = name.to_string();
+        let app = self.app.clone();
+        h_flex()
+            .id(("col-th-title", col_ix))
+            .h_full()
+            .flex_1()
+            .items_center()
+            .cursor_pointer()
+            .on_click(cx.listener(move |table, _, _, cx| {
+                cx.stop_propagation();
+                if let Some(app) = &app {
+                    app.update(cx, |this, cx| this.db_sort_column(col_name.clone(), cx));
+                } else {
+                    table.delegate_mut().toggle_local_sort(col_ix);
+                    table.refresh(cx);
+                    cx.notify();
+                }
+            }))
+            .child(name)
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
@@ -4662,12 +6702,13 @@ impl TableDelegate for DbGrid {
     }
 }
 
-/// A data grid that also scrolls sideways with Shift + mouse wheel. The
-/// table scrolls horizontally on its own only with a trackpad or its
-/// scrollbar (shown while scrolling), and a plain wheel only goes up/down.
-/// The listener runs in the capture phase, before the table's vertical
-/// scroll can take the event.
-fn grid_with_shift_scroll(grid: &Entity<TableState<DbGrid>>) -> AnyElement {
+/// A data grid that also scrolls sideways with Shift + mouse wheel and provides
+/// a dedicated, always-visible horizontal scrollbar that can be dragged directly.
+fn grid_with_shift_scroll(
+    id: impl Into<ElementId>,
+    grid: &Entity<TableState<DbGrid>>,
+    cx: &App,
+) -> AnyElement {
     let grid_for_wheel = grid.clone();
     let tracker = canvas(|_, _, _| {}, move |bounds, _, window, _| {
         let grid = grid_for_wheel.clone();
@@ -4686,9 +6727,27 @@ fn grid_with_shift_scroll(grid: &Entity<TableState<DbGrid>>) -> AnyElement {
             cx.stop_propagation();
         });
     });
-    div().relative().size_full().min_w_0()
-        .child(DataTable::new(grid).stripe(true).bordered(false))
-        .child(tracker.absolute().top_0().left_0().size_full())
+
+    let handle = grid.read(cx).horizontal_scroll_handle.clone();
+    let theme = cx.theme();
+    let border = theme.border;
+
+    v_flex().size_full().min_w_0()
+        .child(
+            div().flex_1().min_h_0().min_w_0().relative()
+                .child(DataTable::new(grid).stripe(true).bordered(false).scrollbar_visible(true, false))
+                .child(tracker.absolute().top_0().left_0().size_full())
+        )
+        .child(
+            div().w_full().h(px(14.)).bg(theme.tokens.table_head)
+                .border_t_1().border_color(border)
+                .child(
+                    Scrollbar::horizontal(&handle)
+                        .id(id)
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout()
+                )
+        )
         .into_any_element()
 }
 
@@ -4702,6 +6761,57 @@ fn usage_meter(label: &'static str, fraction: f32, text: String, cx: &App) -> im
         .child(div().w(px(90.)).h(px(6.)).rounded(px(3.)).bg(theme.muted).overflow_hidden()
             .child(div().h_full().w(relative(fraction)).rounded(px(3.)).bg(color)))
         .child(div().text_xs().font_family("monospace").child(text))
+}
+
+/// A container's ports as chips, one row per reach (Public / Local /
+/// Internal): `25 SMTP`, `8443 → 443 HTTPS`, `53 udp DNS`. Replaces Docker's
+/// raw Ports text, which repeats each port for IPv4 and IPv6.
+fn port_groups(mappings: &[crate::docker::PortMapping], t: &'static i18n::Strings, cx: &App) -> AnyElement {
+    use crate::docker::PortScope;
+    let theme = cx.theme();
+    let (muted, chip_bg, radius) = (theme.muted_foreground, theme.background, theme.radius);
+    let mut groups = v_flex().pt_1().gap_1();
+    for (scope, label, color) in [
+        (PortScope::Public, t.docker_ports_public, theme.green),
+        (PortScope::Local, t.docker_ports_local, theme.blue),
+        (PortScope::Internal, t.docker_ports_internal, muted),
+    ] {
+        let chips: Vec<_> = mappings.iter().filter(|mapping| mapping.scope == scope).map(|mapping| {
+            let main = match (&mapping.address, &mapping.host) {
+                (Some(address), Some(host)) => format!("{address}:{host}"),
+                (None, Some(host)) => host.clone(),
+                (_, None) => mapping.container.clone(),
+            };
+            let forwarded = mapping.host.as_ref().is_some_and(|host| *host != mapping.container);
+            h_flex().gap_1().items_center().px_1p5().py_0p5().rounded(radius).bg(chip_bg)
+                .border_1().border_color(theme.border).text_xs()
+                .child(div().font_family("monospace").font_semibold().child(main))
+                .when(forwarded, |chip| chip.child(div().font_family("monospace").text_color(muted).child(format!("→ {}", mapping.container))))
+                .when(mapping.protocol != "tcp", |chip| chip.child(div().text_color(muted).child(mapping.protocol.clone())))
+                .children(crate::docker::port_service(&mapping.container).map(|service| div().text_color(muted).child(service)))
+        }).collect();
+        if chips.is_empty() { continue; }
+        groups = groups.child(
+            h_flex().gap_2().items_start()
+                .child(h_flex().w(px(64.)).flex_shrink_0().pt_0p5().gap_1p5().items_center().text_xs().text_color(muted)
+                    .child(div().size(px(6.)).rounded(px(3.)).bg(color))
+                    .child(label))
+                .child(h_flex().flex_1().min_w_0().gap_1().flex_wrap().children(chips)),
+        );
+    }
+    groups.into_any_element()
+}
+
+/// `http://127.0.0.1:5001/` → `127.0.0.1:5001`: the part of a `proxy_pass`
+/// target worth showing in a narrow column.
+fn proxy_short(target: &str) -> &str {
+    target.split_once("://").map_or(target, |(_, rest)| rest).trim_end_matches('/')
+}
+
+/// The port of a `proxy_pass` target, if it names one explicitly.
+fn proxy_port(target: &str) -> Option<u16> {
+    let authority = proxy_short(target).split('/').next()?;
+    authority.rsplit_once(':')?.1.parse().ok()
 }
 
 /// Where the backup Save dialog starts: the user's Downloads folder, or
@@ -4807,4 +6917,39 @@ fn size_label(entry: &crate::remote_directory::Entry, t: &'static i18n::Strings)
         Some(size) => format!("{size} B"),
         None => t.not_available.into(),
     }
+}
+
+fn info_detail_row(label: impl Into<SharedString>, value: impl Into<SharedString>, mono: bool, muted: Hsla) -> impl IntoElement {
+    h_flex().w_full().py_0p5().gap_2().items_start().text_xs()
+        .child(div().w(px(130.)).flex_shrink_0().text_color(muted).child(label.into()))
+        .child(
+            div().flex_1().min_w_0()
+                .when(mono, |el| el.font_family("monospace"))
+                .child(value.into())
+        )
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GiB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let len = s.len();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
 }

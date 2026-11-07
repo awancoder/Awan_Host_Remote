@@ -129,24 +129,24 @@
 
 export default [
   {
-    "slug": "awan-host-remote",
+    "slug": "awan-host-manager",
     "name": {
-      "id": "Awan Host Remote",
-      "en": "Awan Host Remote"
+      "id": "Awan Host Manager",
+      "en": "Awan Host Manager"
     },
     "category": "Developer Tool",
     "label": [
       "Desktop"
     ],
     "description": {
-      "id": "Awan Host Remote adalah aplikasi desktop Rust native untuk menghubungkan dan mengelola server Linux melalui SSH dari satu jendela, tanpa Electron, WebView, atau browser. Tambahkan host dengan autentikasi password atau private key, verifikasi fingerprint host key SHA-256, dan simpan login secara aman di Windows Credential Manager. Halaman Summary menampilkan hostname, OS, kernel, uptime, serta pemakaian CPU, RAM, dan disk, lengkap dengan tombol Update System, Reboot, dan Shutdown berkonfirmasi. Terminal interaktif penuh berbasis alacritty_terminal mendukung warna ANSI, resize PTY, vim, dan htop. File Editor menyediakan Explorer folder remote, import file, salin/pindah/ganti nama/hapus, chmod, editor dengan syntax highlighting dan pemeriksaan konflik, preview Markdown, serta Git clone/status/pull/push. Halaman Docker mengelompokkan container per project Compose dengan statistik CPU/RAM, log, restart, rebuild, exec, dan backup database yang langsung diunduh ke komputer. Database Browser untuk MariaDB/MySQL/PostgreSQL di dalam container menampilkan tabel dengan pagination dan editor SQL baca-saja secara default. Tersedia juga pengelolaan firewall UFW/firewalld dengan peringatan akses SSH, serta katalog instalasi paket melalui APT atau DNF. Antarmuka tersedia dalam bahasa Indonesia dan Inggris dengan tema terang/gelap.",
-      "en": "Awan Host Remote is a native Rust desktop app for connecting to and managing Linux servers over SSH from a single window, with no Electron, WebView, or browser. Add hosts with password or private key authentication, verify SHA-256 host key fingerprints, and store logins securely in Windows Credential Manager. The Summary page shows hostname, OS, kernel, uptime, and CPU, RAM, and disk usage, along with confirmed Update System, Reboot, and Shutdown actions. A full interactive terminal powered by alacritty_terminal supports ANSI colors, PTY resizing, vim, and htop. The File Editor provides a remote folder Explorer, file import, copy/move/rename/delete, chmod, an editor with syntax highlighting and conflict checks, Markdown preview, and Git clone/status/pull/push. The Docker page groups containers by Compose project with CPU/RAM stats, logs, restart, rebuild, exec, and database backups downloaded straight to your computer. The Database Browser for MariaDB/MySQL/PostgreSQL containers shows paginated tables and a SQL editor that is read-only by default. It also manages UFW/firewalld rules with SSH lockout warnings and offers a package install catalog via APT or DNF. The interface is available in Indonesian and English with light/dark themes."
+      "id": "Awan Host Manager adalah aplikasi desktop Rust native untuk menghubungkan dan mengelola server Linux melalui SSH dari satu jendela, tanpa Electron, WebView, atau browser. Tambahkan host dengan autentikasi password atau private key, verifikasi fingerprint host key SHA-256, dan simpan login secara aman di Windows Credential Manager. Halaman Summary menampilkan hostname, OS, kernel, uptime, serta pemakaian CPU, RAM, dan disk, lengkap dengan tombol Update System, Reboot, dan Shutdown berkonfirmasi. Terminal interaktif penuh berbasis alacritty_terminal mendukung warna ANSI, resize PTY, vim, dan htop. File Editor menyediakan Explorer folder remote, import file, salin/pindah/ganti nama/hapus, chmod, editor dengan syntax highlighting dan pemeriksaan konflik, preview Markdown, serta Git clone/status/pull/push. Halaman Docker mengelompokkan container per project Compose dengan statistik CPU/RAM, log, restart, rebuild, exec, dan backup database yang langsung diunduh ke komputer. Database Browser untuk MariaDB/MySQL/PostgreSQL di dalam container menampilkan tabel dengan pagination dan editor SQL baca-saja secara default. Tersedia juga pengelolaan firewall UFW/firewalld dengan peringatan akses SSH, serta katalog instalasi paket melalui APT atau DNF. Antarmuka tersedia dalam bahasa Indonesia dan Inggris dengan tema terang/gelap.",
+      "en": "Awan Host Manager is a native Rust desktop app for connecting to and managing Linux servers over SSH from a single window, with no Electron, WebView, or browser. Add hosts with password or private key authentication, verify SHA-256 host key fingerprints, and store logins securely in Windows Credential Manager. The Summary page shows hostname, OS, kernel, uptime, and CPU, RAM, and disk usage, along with confirmed Update System, Reboot, and Shutdown actions. A full interactive terminal powered by alacritty_terminal supports ANSI colors, PTY resizing, vim, and htop. The File Editor provides a remote folder Explorer, file import, copy/move/rename/delete, chmod, an editor with syntax highlighting and conflict checks, Markdown preview, and Git clone/status/pull/push. The Docker page groups containers by Compose project with CPU/RAM stats, logs, restart, rebuild, exec, and database backups downloaded straight to your computer. The Database Browser for MariaDB/MySQL/PostgreSQL containers shows paginated tables and a SQL editor that is read-only by default. It also manages UFW/firewalld rules with SSH lockout warnings and offers a package install catalog via APT or DNF. The interface is available in Indonesian and English with light/dark themes."
     },
     "shortDescription": {
       "id": "Kelola server Linux lewat SSH: terminal, file editor, Docker, database, firewall, dan paket dalam satu aplikasi desktop native.",
       "en": "Manage Linux servers over SSH: terminal, file editor, Docker, databases, firewall, and packages in one native desktop app."
     },
-    "icon": "/assets/logo/awan-host-remote.png",
+    "icon": "/assets/logo/awan-host-manager.png",
     "image": null,
     "website": null,
     "googlePlay": null,

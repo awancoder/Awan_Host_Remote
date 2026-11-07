@@ -46,11 +46,11 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "Awan Host Remote"
+      VALUE "FileDescription", "Awan Host Manager"
       VALUE "FileVersion", "{version}"
-      VALUE "InternalName", "awan-host-remote"
-      VALUE "OriginalFilename", "awan-host-remote.exe"
-      VALUE "ProductName", "Awan Host Remote"
+      VALUE "InternalName", "awan-host-manager"
+      VALUE "OriginalFilename", "awan-host-manager.exe"
+      VALUE "ProductName", "Awan Host Manager"
       VALUE "ProductVersion", "{version}"
     END
   END

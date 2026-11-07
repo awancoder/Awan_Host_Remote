@@ -14,6 +14,7 @@ mod remote_directory;
 mod remote_fs;
 mod live;
 mod ssh;
+mod stalwart;
 mod system_update;
 mod terminal;
 mod terminal_widget;
@@ -31,12 +32,29 @@ mod terminal_widget;
 
 use gpui_kit::AppContext as _;
 
+struct AppAssets;
+
+impl gpui_kit::AssetSource for AppAssets {
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match path {
+            "flags/id.svg" => Ok(Some(std::borrow::Cow::Borrowed(i18n::FLAG_ID_SVG.as_bytes()))),
+            "flags/en.svg" | "flags/gb.svg" => Ok(Some(std::borrow::Cow::Borrowed(i18n::FLAG_EN_SVG.as_bytes()))),
+            _ => gpui_kit::assets::AllAssets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<gpui_kit::SharedString>> {
+        let mut list = gpui_kit::assets::AllAssets.list(path)?;
+        list.push("flags/id.svg".into());
+        list.push("flags/en.svg".into());
+        Ok(list)
+    }
+}
+
 fn main() {
     gpui_kit::application()
-        // The File Editor's explorer/status icons (Wifi, Terminal, FileCode,
-        // Save, ...) live outside gpui-component's small curated icon subset
-        // (`Assets`), so the full bundled Lucide catalog is registered here.
-        .with_assets(gpui_kit::assets::AllAssets)
+        // Embedded Lucide catalog augmented with country flag SVGs.
+        .with_assets(AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             let window_options = gpui_kit::WindowOptions {
@@ -45,12 +63,12 @@ fn main() {
                     cx,
                 )),
                 // Wayland app_id / X11 WM_CLASS; must match StartupWMClass in
-                // packaging/linux/awan-host-remote.desktop for the dock icon.
-                app_id: Some("awan-host-remote".into()),
+                // packaging/linux/awan-host-manager.desktop for the dock icon.
+                app_id: Some("awan-host-manager".into()),
                 ..Default::default()
             };
             gpui_kit::open_window(window_options, cx, |window, cx| {
-                window.set_window_title("Awan Host Remote");
+                window.set_window_title("Awan Host Manager");
                 cx.new(|cx| app::AwanApp::new(window, cx))
             })
             .expect("Failed to open window");

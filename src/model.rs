@@ -8,12 +8,17 @@ pub enum Page {
     /// Read-only browser for a database container; opened from the Docker
     /// page (it needs a container to browse), so it is not in [`Self::ALL`].
     DbBrowser,
+    /// Guided setup for a Stalwart mail container; opened from the Docker
+    /// page, so it is not in [`Self::ALL`] either.
+    Stalwart,
     Tools,
     Hosts,
     /// Global app preferences, not a per-host workspace page — reachable
     /// from the sidebar footer regardless of connection state, so it is
     /// deliberately excluded from [`Self::ALL`].
     Settings,
+    /// Version, features, and security notes; opened from Settings.
+    About,
 }
 
 impl Page {
@@ -37,9 +42,11 @@ impl Page {
             Self::Editor => "File Editor",
             Self::Docker => "Docker",
             Self::DbBrowser => "Database Browser",
+            Self::Stalwart => "Stalwart Setup",
             Self::Tools => "Applications",
             Self::Hosts => "Hosts",
             Self::Settings => crate::i18n::strings(lang).settings_title,
+            Self::About => crate::i18n::strings(lang).settings_about_heading,
         }
     }
 
@@ -51,9 +58,11 @@ impl Page {
             Self::Editor => if lang == crate::i18n::Language::English { "Browse folders, open files, and edit text on the SSH server." } else { "Jelajahi folder, buka file, dan edit teks pada server SSH." },
             Self::Docker => if lang == crate::i18n::Language::English { "Containers and Compose projects on the server: logs, restart, rebuild, exec, and backups." } else { "Container dan project Compose di server: log, restart, rebuild, exec, dan backup." },
             Self::DbBrowser => if lang == crate::i18n::Language::English { "Browse a database container's databases, tables, and rows, and run SQL." } else { "Jelajahi database, tabel, dan baris di container database, serta jalankan SQL." },
+            Self::Stalwart => if lang == crate::i18n::Language::English { "Set up the Stalwart mail server container step by step, through to a working HTTPS WebUI." } else { "Setup container mail server Stalwart langkah demi langkah sampai WebUI HTTPS berjalan." },
             Self::Tools => if lang == crate::i18n::Language::English { "Install, check, and uninstall applications on the SSH server." } else { "Install, periksa, dan uninstall aplikasi pada server SSH." },
             Self::Hosts => if lang == crate::i18n::Language::English { "One workspace for all of your servers." } else { "Satu ruang kerja untuk seluruh server Anda." },
-            Self::Settings => if lang == crate::i18n::Language::English { "App preferences." } else { "Preferensi aplikasi." },
+            Self::Settings => if lang == crate::i18n::Language::English { "Theme, language, and app information." } else { "Tema, bahasa, dan informasi aplikasi." },
+            Self::About => if lang == crate::i18n::Language::English { "Awan Host Manager: version, features, and security." } else { "Awan Host Manager: versi, fitur, dan keamanan." },
         }
     }
 }

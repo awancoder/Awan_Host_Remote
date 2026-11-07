@@ -1,4 +1,4 @@
-# Awan Host Remote
+# Awan Host Manager
 
 Aplikasi desktop **Rust native** untuk menghubungkan dan mengelola server Linux lewat SSH: terminal interaktif, file manager dan editor remote, Docker, database di container, firewall, serta instalasi aplikasi — semuanya dari satu jendela, tanpa Electron, WebView, atau browser.
 
@@ -96,8 +96,8 @@ Paket `.deb` (berisi binary, entri menu aplikasi, dan ikon):
 
 ```bash
 cargo install cargo-deb
-cargo deb                                   # hasil: target/debian/awan-host-remote_<versi>_amd64.deb
-sudo apt install ./target/debian/awan-host-remote_*.deb
+cargo deb                                   # hasil: target/debian/awan-host-manager_<versi>_amd64.deb
+sudo apt install ./target/debian/awan-host-manager_*.deb
 ```
 
 ## Teknologi
